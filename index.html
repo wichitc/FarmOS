@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IFC Viewer</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div class="brand">
+          <span class="brand-icon">◧</span>
+          <span>IFC Viewer</span>
+        </div>
+        <div class="toolbar">
+          <button id="btn-open" class="btn btn-primary">Open IFC File</button>
+          <input id="file-input" type="file" accept=".ifc" hidden />
+          <button id="btn-fit" class="btn" title="Fit model to view">Fit View</button>
+          <button id="btn-tree" class="btn btn-toggle active" title="Toggle spatial tree">Tree</button>
+          <button id="btn-props" class="btn btn-toggle active" title="Toggle properties panel">Properties</button>
+          <button id="btn-dashboard" class="btn" title="Equipment health dashboard">Dashboard</button>
+          <div class="mode-toggle" id="mode-toggle">
+            <button id="btn-mode-view" class="mode-btn" title="Read-only: no equipment editing">View Only</button>
+            <button id="btn-mode-edit" class="mode-btn active" title="Add, move and edit equipment">Editable</button>
+          </div>
+          <span id="model-name" class="model-name"></span>
+        </div>
+      </header>
+
+      <main id="main">
+        <aside id="tree-panel" class="panel">
+          <div class="panel-header panel-tabs">
+            <button class="tab-btn active" data-tab="tree">Model Tree</button>
+            <button id="tab-btn-equipment" class="tab-btn" data-tab="equipment">Equipment</button>
+            <button id="tab-btn-trees" class="tab-btn" data-tab="trees">Trees</button>
+          </div>
+          <div id="eq-place-hint" class="eq-place-hint" hidden>
+            <span id="eq-place-hint-text">Click on the 3D view to place</span>
+            <button id="btn-cancel-place">Cancel</button>
+          </div>
+          <div id="tree-content" class="panel-content tab-content active">
+            <div id="server-models-box">
+              <div class="eq-section-title">
+                Server Models
+                <button id="btn-refresh-models" class="icon-btn" title="Refresh list">⟳</button>
+              </div>
+              <div id="server-models-list"><p class="empty-hint">Checking backend…</p></div>
+              <button id="btn-save-model-server" class="btn" hidden>Save Current Model to Server</button>
+            </div>
+            <div class="eq-section-title">Spatial Tree</div>
+            <div id="spatial-tree-body">
+              <p class="empty-hint">No model loaded yet.</p>
+            </div>
+          </div>
+          <div id="equipment-content" class="panel-content tab-content">
+            <div class="eq-section-title">Drag onto the 3D view, or click to place</div>
+            <div id="equipment-library" class="equipment-grid"></div>
+            <div class="eq-section-title">Placed Equipment</div>
+            <div id="equipment-instances" class="equipment-list">
+              <p class="empty-hint">No equipment placed yet.</p>
+            </div>
+            <div class="eq-actions">
+              <button id="btn-export-layout" class="btn">Export Layout</button>
+              <button id="btn-import-layout" class="btn">Import Layout</button>
+              <input id="layout-file-input" type="file" accept=".json" hidden />
+            </div>
+          </div>
+          <div id="trees-content" class="panel-content tab-content">
+            <div class="eq-section-title">Drag onto the 3D view, or click to place</div>
+            <div id="tree-library" class="equipment-grid"></div>
+            <div class="eq-section-title">Planted Trees</div>
+            <div id="tree-instances" class="equipment-list">
+              <p class="empty-hint">No trees planted yet.</p>
+            </div>
+            <div class="eq-actions">
+              <button id="btn-export-layout-trees" class="btn">Export Layout</button>
+              <button id="btn-import-layout-trees" class="btn">Import Layout</button>
+            </div>
+          </div>
+        </aside>
+
+        <div id="viewer-container">
+          <div id="drop-overlay">
+            <div class="drop-box">
+              <div class="drop-icon">⇪</div>
+              <p><strong>Drag &amp; drop</strong> an .ifc file here</p>
+              <p class="or">or</p>
+              <button id="btn-open-2" class="btn btn-primary">Browse files</button>
+            </div>
+          </div>
+          <div id="loading-overlay" class="hidden">
+            <div class="spinner"></div>
+            <p id="loading-text">Loading model…</p>
+          </div>
+        </div>
+
+        <aside id="props-panel" class="panel">
+          <div class="panel-header">Properties</div>
+          <div id="props-content" class="panel-content">
+            <p class="empty-hint">Click an element in the 3D view or the tree to see its properties.</p>
+          </div>
+        </aside>
+      </main>
+
+      <div id="dashboard-overlay" class="dashboard-overlay hidden">
+        <div class="dashboard-panel">
+          <div class="dashboard-header">
+            <h2>Equipment Health Dashboard</h2>
+            <button id="btn-close-dashboard" class="icon-btn" title="Close">✕</button>
+          </div>
+          <div id="dashboard-body" class="dashboard-body">
+            <p class="empty-hint">Loading…</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
