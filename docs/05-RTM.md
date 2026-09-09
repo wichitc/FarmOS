@@ -16,9 +16,9 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 | FR-GIS / GIS (GIS & Spatial) | BRD §3, SRS §2 | Phase 5 | 🟢 backend implemented (see Phase 5 checklist below); map client pending frontend rewrite | Partial (basic map only) |
 | FR-TWIN / TWIN (Digital Twin & 3D) | BRD §4, SRS §1 | Phase 6 | 🟡 backend Digital Twin Core implemented (see Phase 6 checklist below); IFC viewer is still the only 3D piece — Next.js/Cesium frontend work explicitly deferred | Yes |
 | FR-IOT / IOT (IoT Platform) | BRD §5, SRS §3 | Phase 7 | 🟢 implemented (see Phase 7 checklist below) | Yes (simulator-driven) |
-| FR-IRR / FR-FERT (Irrigation & Fertigation) | BRD §6 | Phase 8 | ⚪ not started | Yes (manual-approval mode) |
-| FR-CCTV / VIS (Vision AI) | BRD §7, SRS §5 | Phase 9 | ⚪ not started | No |
-| FR-DRONE (Drone) | BRD §8 | Phase 9 (adjacent) | ⚪ not started | No |
+| FR-IRR / FR-FERT (Irrigation & Fertigation) | BRD §6 | Phase 8 | 🟢 implemented, manual-approval mode (see Phase 8 checklist below) | Yes (manual-approval mode) |
+| FR-CCTV / VIS (Vision AI) | BRD §7, SRS §5 | Phase 9 | 🟡 data model + human-review workflow + safety constraints implemented; inference is a stub (see Phase 9 checklist below) | No |
+| FR-DRONE (Drone) | BRD §8 | Phase 9 (adjacent) | ⚪ not started (C-priority, deferred — see Phase 9 checklist) | No |
 | FR-HEALTH (Crop Health/Disease) | BRD §9 | Phase 10 | ⚪ not started | No |
 | FR-YIELD / FR-HARV (Yield & Harvest) | BRD §10 | Phase 11 | ⚪ not started | No |
 | FR-WORK (Farm Work Management) | BRD §11 | Phase 3–4 (cross-cutting) / Phase 17 (mobile) | ⚪ not started | Partial (backlog) |
@@ -29,7 +29,7 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 | FR-SALES (Sales & Customer) | BRD §16 | Phase 14 (adjacent) | ⚪ not started | No |
 | FR-AIML / FR-COPILOT / FR-AGENT (AI Platform) | BRD §17, SRS §4 | Phase 15 | 🟡 health.py is a rule-based placeholder for the ML contract | Partial (rule-engine placeholder only) |
 | FR-ALERT (Alerts) | BRD §18 | Phase 7 (with IoT) | 🟢 implemented (ack/resolve; escalation/SLA deferred, see Phase 7 checklist) | Yes |
-| FR-WX (Weather) | BRD §19 | Phase 8 (with Irrigation) | ⚪ not started | Yes |
+| FR-WX (Weather) | BRD §19 | Phase 8 (with Irrigation) | 🟢 data model + ingestion implemented; no real external provider wired (see Phase 8 checklist) | Yes |
 | FR-DASH (Command Center) | BRD §20 | Phase 16 | 🟡 fleet health dashboard exists, not configurable | Yes (minimal) |
 | FR-MOB (Mobile/PWA) | BRD §21 | Phase 17 | ⚪ not started | No (post-MVP) |
 | SEC / DATA / DEP / NFR (cross-cutting) | SRS §7,§10,§12,§11 | Phase 3 (foundation) + Phase 18 (hardening) | ⚪ mostly not started (see risk R-01..R-05) | Yes (baseline security/data hygiene is MVP-blocking even if full hardening isn't) |
@@ -212,3 +212,44 @@ No business-feature code is written against this architecture until sign-off, pe
 - **Modbus/LoRaWAN/HTTP/WebSocket ingestion (FR-IOT-002)** — only the MQTT path is wired end-to-end; ADR-003 already assigns non-MQTT protocols to be bridged at the Edge Gateway (Phase 9/17 territory), not spoken directly by the core platform
 - **TimescaleDB continuous aggregates** (hourly/daily telemetry rollups) — not built; no dashboard consumes them yet
 - **Device calibration records (FR-IOT-006, S-priority)** — not built this pass
+
+## Phase 8 completion checklist (Irrigation & Fertigation + Weather)
+
+- [x] Water network infrastructure modeled as `DigitalTwin`s (`"water"` added to `TWIN_TYPE_CATEGORIES`, `backend/app/twins/models.py`) connected via the existing `TwinRelationship` graph (`SUPPLIED_BY`/`DRAWS_FROM`, already named in TWIN-003) — FR-IRR-001, no new tables needed per ADR-004
+- [x] Approval-before-execution made structural, not configurable (FR-IRR-003/004, docs/09-SECURITY-ARCHITECTURE.md §6's hardcoded L3 floor): `provision_tenant()` (`backend/app/foundation/seed.py`) now auto-seeds an `irrigation_plan` and a `fertigation_plan` `WorkflowDefinition` for every new tenant; a plan can only reach `status="approved"` through `workflow_engine.submit`/`decide` — verified by `test_seeded_approval_workflows_exist_for_new_tenant` and the full submit→approve→execute / submit→reject→blocked lifecycle tests
+- [x] `IrrigationPlan`/`IrrigationEvent` (plan-vs-actual, safety-check fields, actor-traceable) and `FertigationPlan`/`FertigationEvent` (down to tree-level granularity per FR-FERT-002) — `backend/app/irrigation/models.py`, migration `backend/alembic/versions/0008_irrigation_fertigation.py`
+- [x] Fertilizer master data with N/P/K/Ca/Mg/S composition (FR-FERT-001) — `backend/app/irrigation/models.py::Fertilizer`
+- [x] Rule-based recommendation engine (FR-IRR-002/FR-FERT-003), same "indicative defaults, not certified" treatment as `health.py`: `backend/app/irrigation/recommendation.py::recommend_irrigation`/`recommend_fertigation`, pure functions with unit tests, every recommendation carries an explicit `reason` string
+- [x] Weather readings, source-tagged and append-only (`station` vs `forecast`) — structurally satisfies FR-WX-001's "never overwrite an observed reading with forecast data" since nothing is ever overwritten; `current_reading()` prefers `station` over `forecast` — `backend/app/weather/`
+- [x] RBAC: `irrigation.plan.*`/`fertigation.plan.*`/`fertilizer.*`/`weather.*` granted per role; approval itself reuses the existing `workflow.instance.approve` permission plus a farm-scope check layered in the irrigation router on top of the workflow engine's own (farm-unaware) role check
+- [x] Automated tests (`backend/tests/test_irrigation.py`): recommendation-engine unit tests (no DB), full plan lifecycle (create → submit → approve → execute → `IrrigationEvent`), reject path blocks execution, execute blocked unless approved, seeded-workflow-definitions check, fertigation tree-level granularity, weather station-preferred-over-forecast, farm-scoped ABAC
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **Scheduled/cron-triggered irrigation** — no scheduler infrastructure yet (same reasoning as Phase 7's alert-SLA deferral); `source="scheduled"` is already a valid enum value on both plan types so this is additive later, not a schema change
+- **AI-recommended irrigation/fertigation** — `source="ai_recommended"` likewise reserved; real ET-based/ML modeling replacing `recommendation.py`'s rule-based placeholder is Phase 15 (AI Platform) work
+- **Real external weather provider** — no vendor/API key decided; `WeatherProvider` protocol + `StubWeatherProvider` (`backend/app/weather/provider.py`) mark the integration point, mirroring the `NotificationSender` stub pattern from Phase 3
+- **Fertilizer stock linkage (FR-FERT-001)** — `Fertilizer.stock_ref` is a free-text placeholder, not a real FK; Inventory doesn't exist until Phase 13
+- **FR-IRR-004 safety limits** (max runtime, dry-run protection, pressure check, valve-confirmation, emergency stop) are recorded as a `safety_checks` jsonb bag on `IrrigationEvent` for traceability, not independently enforced by the platform — there is no real actuator/PLC integration yet for the platform to enforce them against
+
+## Phase 9 completion checklist (CCTV & Vision AI — stub scaffold)
+
+**Scope note**: Phase 9 is explicitly marked "not in MVP" in this table, and the actual vision pipeline (FR-CCTV-002) is priority S while only the safety constraints around it (FR-CCTV-004/005) are M. Per an explicit user decision, this phase scaffolds the data model, human-review workflow, and those safety constraints now — with a stub (no-op) inference engine rather than a real vision model, mirroring the `health.py`/`WeatherProvider` "shape now, real integration later" pattern used throughout this project.
+
+- [x] Camera registry (FR-CCTV-001): `Camera` as a `DigitalTwin` extension row (category `"camera"`, already in `TWIN_TYPE_CATEGORIES` since Phase 6) — same shared-kernel pattern as `IotDevice` (Phase 7) — `backend/app/vision/models.py`, migration `backend/alembic/versions/0009_vision_ai.py`
+- [x] Vision model catalog (FR-CCTV-002): `VisionModel` configuration rows per use case (tree-health, fruit detection, maturity, disease-symptom, intrusion, worker-safety, vehicle) — not real model artifacts or an inference runtime
+- [x] `Detection` records carry every field FR-CCTV-003/VIS-001 requires: model name/version (via `model_id`), timestamp, source frame reference, confidence, detected class, bounding box, source camera, and associated tree/plot
+- [x] Human-review workflow (FR-CCTV-004/VIS-002): `validation_status` (`pending`/`confirmed`/`rejected`), reviewer + timestamp + notes recorded, a detection can only be reviewed once
+- [x] Hard safety constraint (FR-CCTV-005): confirming a detection has **no code path** that creates a Disease Incident or triggers any treatment — verified by inspection of `_review_detection` in `backend/app/routers/v1/vision.py`, documented as vacuously-but-genuinely satisfied since no auto-treatment path exists anywhere in the platform yet
+- [x] Stub inference engine (`backend/app/vision/inference.py::StubVisionInferenceEngine`) — the `VisionInferenceEngine` protocol is the integration point a real model plugs into later; today, detections are entered directly via `POST /api/v1/vision/cameras/{id}/detections` (by a human reviewer or a test harness), the same endpoint a real engine would call
+- [x] RBAC: `vision.camera.*`/`vision.model.*`/`vision.detection.*` granted per role (farm_owner/farm_manager/agronomist manage; field_worker can review detections but not manage cameras/models; viewer view-only)
+- [x] Automated tests (`backend/tests/test_vision.py`): stub engine returns nothing, camera registration, vision model catalog, detection confirm/reject lifecycle (including "already reviewed" blocked), tree-linked detection, farm-scoped ABAC
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **Real vision inference** (any actual ML model, GPU runtime, or vendor API) — no vendor/model decided anywhere in the docs; `StubVisionInferenceEngine` is the marked integration point
+- **RTSP/ONVIF stream ingestion and frame capture** — `Camera.stream_url` is stored but nothing connects to it; there is no video pipeline
+- **Object-storage frame upload** (VIS-001 requires persisting the source frame) — `Detection.frame_ref` is a placeholder string field; no real MinIO upload path is wired yet (MinIO itself is already in `docker-compose.yml` per DEP-001 but unused by this phase)
+- **Configurable per-camera sampling rate/retention (VIS-003)** — not built; moot without a real video pipeline to sample from
+- **Disease Incident creation from confirmed detections** — deliberately left to Phase 10 (`FR-HEALTH`), which owns the full Detected→...→Resolved lifecycle and shouldn't have that design pre-empted by a stub phase
+- **Drone (FR-DRONE)** — C-priority (lowest), not in MVP, zero infrastructure decided anywhere in the docs; skipped entirely this pass rather than building a placeholder with no real consumer

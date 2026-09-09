@@ -10,6 +10,9 @@ from app.farm import models as farm_models  # noqa: F401
 from app.gis import models as gis_models  # noqa: F401
 from app.twins import models as twin_models  # noqa: F401
 from app.iot import models as iot_models  # noqa: F401
+from app.irrigation import models as irrigation_models  # noqa: F401
+from app.weather import models as weather_models  # noqa: F401
+from app.vision import models as vision_models  # noqa: F401
 from app import models as legacy_models  # noqa: F401
 
 config = context.config

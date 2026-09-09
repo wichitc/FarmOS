@@ -28,7 +28,7 @@ def _uuid_pk() -> Mapped[str]:
     return mapped_column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
 
 
-TWIN_TYPE_CATEGORIES = ("tree", "asset", "sensor", "camera", "building", "other")
+TWIN_TYPE_CATEGORIES = ("tree", "asset", "sensor", "camera", "building", "water", "other")
 
 
 class TwinType(TenantScopedMixin, Base):

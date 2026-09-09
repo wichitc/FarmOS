@@ -75,5 +75,31 @@ def provision_tenant(
             scope_type="tenant",
         )
     )
+
+    _seed_mandatory_approval_workflows(db, tenant.id)
+
     db.flush()
     return tenant, admin_user
+
+
+def _seed_mandatory_approval_workflows(db: Session, tenant_id: str) -> None:
+    """docs/09-SECURITY-ARCHITECTURE.md §6: pump/valve activation is
+    hardcoded at approval-level L3 minimum in the gateway itself - no
+    per-tenant policy can downgrade it below human approval. Seeding these
+    at provisioning time (rather than requiring a tenant admin to configure
+    them) is what makes that floor structural instead of something a tenant
+    could simply forget to set up - `IrrigationPlan`/`FertigationPlan`
+    (Phase 8, `app.irrigation`) can only reach `status="approved"` by going
+    through one of these."""
+    for entity_type, name in (
+        ("irrigation_plan", "Irrigation Plan Approval"),
+        ("fertigation_plan", "Fertigation Plan Approval"),
+    ):
+        db.add(
+            fm.WorkflowDefinition(
+                tenant_id=tenant_id,
+                entity_type=entity_type,
+                name=name,
+                steps=[{"step": 1, "approver_role_code": "farm_manager"}],
+            )
+        )
