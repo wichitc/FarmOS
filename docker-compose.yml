@@ -1,0 +1,77 @@
+name: durianos
+
+services:
+  db:
+    image: timescale/timescaledb-ha:pg16-all
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: durianos
+      POSTGRES_PASSWORD: durianos
+      POSTGRES_DB: durianos
+    ports:
+      - "5544:5432"
+    volumes:
+      - db-data:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U durianos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+
+  # Declared per DEP-001 for later phases (IoT/Vision AI/Edge) - not yet
+  # wired into application code in Phase 3, just available in the dev stack.
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./infrastructure/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: durianos
+      MINIO_ROOT_PASSWORD: durianos123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  nats:
+    image: nats:latest
+    restart: unless-stopped
+    command: ["-js"]
+    ports:
+      - "4222:4222"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://durianos:durianos@db:5432/durianos
+      APP_DATABASE_URL: postgresql+psycopg://durianos_app:durianos_app@db:5432/durianos
+      CORS_ORIGINS: http://localhost:5173
+      SECRET_KEY: dev-only-insecure-secret-change-me
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+volumes:
+  db-data:
+  minio-data:
