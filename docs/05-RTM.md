@@ -1,0 +1,153 @@
+# 05 — Requirement Traceability Matrix, Risks, Assumptions, Open Decisions
+
+**Document status:** Draft for internal review · Phase 0 · v0.1
+**Related:** [01-VISION.md](01-VISION.md) · [02-SCOPE.md](02-SCOPE.md) · [03-BRD.md](03-BRD.md) · [04-SRS.md](04-SRS.md)
+
+---
+
+## 1. Requirement Traceability Matrix (module level)
+
+Maps each requirement block to its target SDLC phase (per the platform brief's §52 phase plan), current codebase maturity (from [00-EXISTING-CODEBASE-ANALYSIS.md](00-EXISTING-CODEBASE-ANALYSIS.md)), and MVP status.
+
+| Requirement block | Doc | Target phase | Current maturity | In MVP? |
+|---|---|---|---|---|
+| FR-PLT (Platform Foundation) | BRD §1 | Phase 3 | 🟢 implemented (see Phase 3 checklist below) | Yes |
+| FR-FARM (Farm & Crop Domain) | BRD §2 | Phase 4 | 🟢 implemented (see Phase 4 checklist below) | Yes |
+| FR-GIS / GIS (GIS & Spatial) | BRD §3, SRS §2 | Phase 5 | ⚪ not started | Partial (basic map only) |
+| FR-TWIN / TWIN (Digital Twin & 3D) | BRD §4, SRS §1 | Phase 6 | 🟢 seed exists (IFC viewer) | Yes |
+| FR-IOT / IOT (IoT Platform) | BRD §5, SRS §3 | Phase 7 | ⚪ not started (manual condition fields only) | Yes (simulator-driven) |
+| FR-IRR / FR-FERT (Irrigation & Fertigation) | BRD §6 | Phase 8 | ⚪ not started | Yes (manual-approval mode) |
+| FR-CCTV / VIS (Vision AI) | BRD §7, SRS §5 | Phase 9 | ⚪ not started | No |
+| FR-DRONE (Drone) | BRD §8 | Phase 9 (adjacent) | ⚪ not started | No |
+| FR-HEALTH (Crop Health/Disease) | BRD §9 | Phase 10 | ⚪ not started | No |
+| FR-YIELD / FR-HARV (Yield & Harvest) | BRD §10 | Phase 11 | ⚪ not started | No |
+| FR-WORK (Farm Work Management) | BRD §11 | Phase 3–4 (cross-cutting) / Phase 17 (mobile) | ⚪ not started | Partial (backlog) |
+| FR-ASSET (Asset & Machinery) | BRD §12 | Phase 12 | 🟢 seed exists (Equipment table, 10 types) | Yes (carried from MVP-adjacent Phase 6) |
+| FR-MNT / FR-PDM (Maintenance) | BRD §13 | Phase 12 | 🟡 rule-based health score exists, no WorkOrder | Partial |
+| FR-INV / FR-PROC (Inventory & Procurement) | BRD §14 | Phase 13 | ⚪ not started | No |
+| FR-ACC / FR-PROF (Farm Accounting) | BRD §15 | Phase 14 | ⚪ not started | No |
+| FR-SALES (Sales & Customer) | BRD §16 | Phase 14 (adjacent) | ⚪ not started | No |
+| FR-AIML / FR-COPILOT / FR-AGENT (AI Platform) | BRD §17, SRS §4 | Phase 15 | 🟡 health.py is a rule-based placeholder for the ML contract | Partial (rule-engine placeholder only) |
+| FR-ALERT (Alerts) | BRD §18 | Phase 7 (with IoT) | ⚪ not started | Yes |
+| FR-WX (Weather) | BRD §19 | Phase 8 (with Irrigation) | ⚪ not started | Yes |
+| FR-DASH (Command Center) | BRD §20 | Phase 16 | 🟡 fleet health dashboard exists, not configurable | Yes (minimal) |
+| FR-MOB (Mobile/PWA) | BRD §21 | Phase 17 | ⚪ not started | No (post-MVP) |
+| SEC / DATA / DEP / NFR (cross-cutting) | SRS §7,§10,§12,§11 | Phase 3 (foundation) + Phase 18 (hardening) | ⚪ mostly not started (see risk R-01..R-05) | Yes (baseline security/data hygiene is MVP-blocking even if full hardening isn't) |
+
+## 2. Risks
+
+| ID | Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|---|
+| R-01 | No authentication/authorization exists today; if Phase 3 IAM slips, later phases get built on an insecure foundation that's expensive to retrofit | Medium | High | Treat FR-PLT-002/003/004 and SEC-001..003 as hard blockers before any non-localhost deployment; do not sequence farm/crop feature work ahead of foundation IAM |
+| R-02 | The `Equipment` table's tree/asset conflation (string-prefix hack) becomes entrenched if agronomy fields get bolted onto it before the Phase-6 twin remodel happens | Medium | High | Schedule the `Equipment` → `DigitalTwin`/`TwinType` split explicitly as a Phase 6 task, before Phase 9–11 (Vision AI, Health, Yield) add fields that would otherwise land on the wrong table |
+| R-03 | No database migrations tool — concurrent schema work by multiple contributors on `create_all()` risks silent data loss or drift between environments | High (given current absence) | High | Adopt Alembic in the very first Phase-3 commit, before any other schema change |
+| R-04 | Vision AI / disease-detection false positives, if not gated by the human-review workflow (FR-CCTV-004), could trigger unnecessary/harmful chemical treatments | Low (mitigated by design) | High | Enforce VIS-002 and BR-002/BR-003 in the platform's shared agent-governance layer (AI-004), not per-feature, so no future module can bypass the review gate by omission |
+| R-05 | Edge/offline sync conflict resolution (mobile PWA, edge gateway) is architecturally hard and easy to under-scope | Medium | Medium | Design conflict resolution rules explicitly in Phase 7/17 architecture docs before implementation, with test cases for concurrent edits from field + office |
+| R-06 | Multi-tenancy retrofit after farm/crop data model is built single-tenant would be a breaking migration | Medium | High | `tenant_id` on every table from the first Phase-3/4 migration, even while only one tenant exists in practice |
+| R-07 | LLM-provider lock-in if a specific SDK is called directly from business logic | Low | Medium | Enforce AI-003's provider-abstraction interface from the first AI integration, reviewed in code review |
+| R-08 | Scope described in the master platform brief (60+ sections) is large enough that incremental delivery could stall without a firm MVP boundary | Medium | Medium | Hold the line on the MVP boundary defined in [02-SCOPE.md §6](02-SCOPE.md); treat everything else as explicitly sequenced backlog, not "also needed for v1" |
+
+## 3. Assumptions
+
+| ID | Assumption | Rationale |
+|---|---|---|
+| A-01 | This repository (`DurianOS`) becomes `apps/web` + `services/digital-twin` (and possibly `services/ai` for the health-score placeholder) under the target monorepo layout, rather than being discarded and rebuilt from zero | The existing IFC viewer and health-score contract are working, demonstrably-useful seeds (see [00-EXISTING-CODEBASE-ANALYSIS.md §4](00-EXISTING-CODEBASE-ANALYSIS.md)) |
+| A-02 | Initial deployment target is on-premise or single-region cloud for one pilot organization, not immediately multi-region SaaS | No stated requirement for immediate multi-tenant commercial launch; multi-tenancy is architected for but not the first production load |
+| A-03 | Real IoT hardware (soil/weather sensors, pump controllers) is not yet procured/connected; Phase 7 IoT work proceeds against the device simulator (FR-IOT-005) until hardware arrives | No hardware inventory or vendor selection has been provided |
+| A-04 | A corporate ERP for General Ledger accounting may or may not already exist for the pilot tenant; the accounting module is built as management-accounting-plus-integration-API rather than a GL replacement, per FIN-003 | Master brief explicitly directs this rather than duplicating GL functionality |
+| A-05 | "Enterprise-grade" security posture (SEC-001..008) is required before production go-live but not before internal dev/demo use of Phase 3–6 | Standard staged-hardening practice; avoids gold-plating early throwaway prototypes while still tracking the requirement |
+| A-06 | Thai is the primary operational language; English is the secondary/admin language | Stated in the brief and evidenced by existing Thai strings already in this repo's UI and health engine |
+
+## 4. Open architecture decisions — resolved in Phase 1
+
+All ten were resolved as ADRs during Phase 1; see [11-ADR.md](11-ADR.md) for full Context/Decision/Alternatives/Consequences on each.
+
+| # | Decision needed | Resolution | ADR |
+|---|---|---|---|
+| 1 | Primary relational database | PostgreSQL + PostGIS | [ADR-001](11-ADR.md) |
+| 2 | Time-series store | TimescaleDB | [ADR-002](11-ADR.md) |
+| 3 | Event/message bus | MQTT (device layer) + NATS (internal events) | [ADR-003](11-ADR.md), [ADR-010](11-ADR.md) |
+| 4 | Multi-tenancy isolation strategy | Row-level security with `tenant_id` (not schema/database-per-tenant) | [ADR-007](11-ADR.md) |
+| 5 | 3D/GIS rendering split | IFC (web-ifc-viewer/Three.js) for built/mechanical structures; CesiumJS/3D Tiles for orchard/terrain; composited in one scene | [ADR-005](11-ADR.md), [ADR-006](11-ADR.md) |
+| 6 | LLM provider default | Ollama (local) default for on-prem; OpenAI-compatible hosted endpoint selectable per tenant | [ADR-011](11-ADR.md) |
+| 7 | Object storage | S3-compatible abstraction, MinIO for on-prem/local (see [08-DATA-ARCHITECTURE.md §1](08-DATA-ARCHITECTURE.md)) | referenced in [08-DATA-ARCHITECTURE.md](08-DATA-ARCHITECTURE.md) |
+| 8 | Frontend framework migration path | Incremental strangler-fig migration to Next.js/React/TS, not a rewrite | [ADR-012](11-ADR.md) |
+| 9 | Edge gateway runtime | Containerized stack on a farm-site mini-PC/gateway device; sizing (vs. k3s) deferred to Phase 7 once device counts are known | [ADR-009](11-ADR.md) |
+| 10 | Mobile PWA offline conflict policy | Field-wins for task-execution fields; explicit manual merge for financial/inventory-quantity fields | [ADR-013](11-ADR.md) |
+
+---
+
+## Phase 0 completion checklist
+
+- [x] Vision, business goals, stakeholders, personas, glossary — [01-VISION.md](01-VISION.md)
+- [x] Scope, out-of-scope, functional modules, business capability map, MVP boundary — [02-SCOPE.md](02-SCOPE.md)
+- [x] Functional requirements (21 module groups, ~120 FRs) with IDs and priority — [03-BRD.md](03-BRD.md)
+- [x] Business rules (8 cross-cutting rules) — [03-BRD.md §22](03-BRD.md)
+- [x] Non-functional requirements + Digital Twin / GIS / IoT / AI / Vision AI / Accounting / Security / Integration / Reporting / Data / Deployment requirement sections — [04-SRS.md](04-SRS.md)
+- [x] Risks, assumptions, open architecture decisions — this document
+- [x] Requirement traceability matrix (module → phase → maturity → MVP status) — this document §1
+- [ ] Stakeholder review/sign-off — **pending, human step, not something this document set can self-certify**
+
+## Phase 1 completion checklist
+
+- [x] Context diagram — [06-ARCHITECTURE.md §2](06-ARCHITECTURE.md)
+- [x] Container diagram — [06-ARCHITECTURE.md §3](06-ARCHITECTURE.md)
+- [x] Component diagram (representative service) — [06-ARCHITECTURE.md §4](06-ARCHITECTURE.md)
+- [x] Deployment diagram — [06-ARCHITECTURE.md §5](06-ARCHITECTURE.md)
+- [x] Domain model / bounded contexts / context map / event catalog — [07-DOMAIN-MODEL.md](07-DOMAIN-MODEL.md)
+- [x] Data architecture (store selection, data flow, classification/retention, conceptual ERD) — [08-DATA-ARCHITECTURE.md](08-DATA-ARCHITECTURE.md)
+- [x] Security architecture (zero trust, IAM, RBAC+ABAC, multi-tenancy, network zones, AI governance gateway, audit, secrets) — [09-SECURITY-ARCHITECTURE.md](09-SECURITY-ARCHITECTURE.md)
+- [x] Integration architecture (API standards, event catalog governance, external integration table) — [10-INTEGRATION-ARCHITECTURE.md](10-INTEGRATION-ARCHITECTURE.md)
+- [x] 13 ADRs covering all 10 Phase-0 open decisions plus 3 additional decisions surfaced during Phase 1 (twin graph model, IFC/3D-Tiles boundary rule, frontend migration path) — [11-ADR.md](11-ADR.md)
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+No business-feature code is written against this architecture until sign-off, per the platform brief's Phase 1 gate ("No business feature coding until approved architecture documents exist").
+
+## Phase 2 completion checklist
+
+- [x] Design system foundations (tokens, status/band convention) — [12-UX-UI.md §1](12-UX-UI.md)
+- [x] Navigation shell — [12-UX-UI.md §2](12-UX-UI.md)
+- [x] Sitemap (desktop + reduced mobile PWA sitemap) — [12-UX-UI.md §3](12-UX-UI.md)
+- [x] Core UI component inventory (carried-forward vs. new) — [12-UX-UI.md §4](12-UX-UI.md)
+- [x] 4 key user journeys mapped to personas — [12-UX-UI.md §5](12-UX-UI.md)
+- [x] Wireframe specs for all 15 pages (Dashboard, Farm Map, 3D Twin, Trees, Sensors, Cameras, Irrigation, Disease, Harvest, Assets, Maintenance, Inventory, Finance, Admin, Mobile PWA) with API source and requirement refs — [12-UX-UI.md §6](12-UX-UI.md)
+- [x] Responsive behavior rules — [12-UX-UI.md §7](12-UX-UI.md)
+- [x] UI states (loading/empty/error/permission-denied/offline/stale) — [12-UX-UI.md §8](12-UX-UI.md)
+- [x] Accessibility & localization — [12-UX-UI.md §9](12-UX-UI.md)
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+## Phase 3 completion checklist (Platform Foundation)
+
+- [x] Repo/dev-stack: `docker-compose.yml` (Postgres+PostGIS+TimescaleDB, Redis, MQTT, MinIO, NATS, backend), `backend/Dockerfile` — closes DEP-001
+- [x] Alembic migrations replace `Base.metadata.create_all()` entirely — closes Risk R-03 (`backend/alembic/versions/0001..0003`)
+- [x] Tenant/Identity: `Tenant`, `Organization`, `User` with tenant-scoped, RLS-enforced isolation — [backend/app/foundation/models.py](../backend/app/foundation/models.py), [ADR-007](11-ADR.md)
+- [x] Auth: tenant-scoped login (slug+email+password), JWT access/refresh, Argon2 password hashing — `backend/app/core/security.py`, `backend/app/routers/v1/auth.py` — FR-PLT-002, SEC-001
+- [x] RBAC + ABAC: `Role`/`Permission`/`RolePermission`/`UserRoleAssignment` (scope_type/scope_id), 10 system roles seeded per tenant matching the personas in [01-VISION.md §4](01-VISION.md) — FR-PLT-003/004
+- [x] Audit: append-only `AuditEntry`, written in the same transaction as every state change — `backend/app/foundation/audit.py` — FR-PLT-007, BR-004
+- [x] Master data: `Crop`/`Variety` (tenant-scoped, versioned) — seed of the Crop Configuration Engine — FR-FARM-003
+- [x] Configuration: tenant-scoped key/value `TenantConfig` — FR-PLT-010
+- [x] Workflow/approval engine: generic `WorkflowDefinition`/`WorkflowInstance`/`WorkflowStepEvent`, condition-gated multi-step approval, role-based approver enforcement — `backend/app/foundation/workflow_engine.py` — FR-PLT-005/006
+- [x] Notification: in-app `Notification` + `NotificationSender` interface (Email/LINE stubbed as documented integration points, not wired) — FR-PLT-008
+- [x] **Row-level tenant isolation actually verified against a real Postgres**, not assumed — `backend/tests/test_tenant_isolation.py`; caught and fixed two real bugs in the process (superuser bypassing RLS; `SET LOCAL`/`expire_on_commit` transaction-boundary interaction) — see commit history for details
+- [x] 15 automated tests (auth, RBAC, audit, workflow, tenant isolation) passing against a live containerized Postgres — `backend/tests/`
+- [x] Legacy `models`/`equipment`/`dashboard` endpoints left untouched and still verified working (`/api/models` smoke-tested) — tenant/twin migration explicitly deferred to Phase 4/6, not silently dropped
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Known follow-ups carried into Phase 4/6** (not gaps in this phase's own scope): legacy equipment/model endpoints remain unauthenticated and outside RLS until they migrate onto the `DigitalTwin` model (ADR-004); `EmailNotificationSender`/`LineNotificationSender` are interface stubs with no real provider wired; ~~ABAC farm/plot-scope enforcement has no farm/plot entities to test against yet (Phase 4)~~ — closed by Phase 4, see below.
+
+## Phase 4 completion checklist (Farm & Crop Domain)
+
+- [x] Spatial/organizational hierarchy `Farm → Zone → Plot → Block → Row → Tree` — `backend/app/farm/models.py`, migration `backend/alembic/versions/0004_farm_crop.py` — FR-FARM-001
+- [x] Twin ID (FR-FARM-002): `Tree.id` is the immutable surrogate now, `Tree.code` the mutable human-facing code (auto-composed `{farm.code}-{species}-{block.code}-{row.code}-T{seq}`, overridable) — formal reconciliation onto `DigitalTwin.id` is a named Phase 6 task per [08-DATA-ARCHITECTURE.md §6](08-DATA-ARCHITECTURE.md), not done here
+- [x] Season as a first-class entity, scoped to Farm — `backend/app/farm/models.py::Season` — FR-FARM-004
+- [x] Per-tree agronomic fields (crop, variety, planting date, rootstock, height, canopy, trunk diameter, growth stage, GPS) — FR-FARM-005
+- [x] Bulk tree creation: JSON bulk-create, CSV import, and grid-spacing generation — `POST /api/v1/farm/rows/{row_id}/trees/{bulk,import-csv,generate-grid}` — FR-FARM-006
+- [x] Append-only per-tree event history (`TreeEvent`) as the FR-FARM-007 linkage point until Irrigation/Health/Yield/Finance land their own tables in Phases 8-14
+- [x] RBAC: `farm.*`/`tree.*`/`season.*` permissions added to the catalog and granted to the relevant system roles (`farm_owner`, `farm_manager`, `agronomist`, `field_worker`, `viewer`) — `backend/app/foundation/rbac_catalog.py`
+- [x] ABAC farm-scope enforcement actually wired and tested against real `Farm` rows (`assert_farm_scope` in `backend/app/core/deps.py`) — closes the Phase-3 follow-up above
+- [x] Tenant RLS extended to all 8 new tables, same `tenant_isolation` policy pattern as Phase 3
+- [x] Soft-delete on `Tree` (`deleted_at`) per [08-DATA-ARCHITECTURE.md §4](08-DATA-ARCHITECTURE.md)
+- [x] Automated tests (`backend/tests/test_farm.py`): full hierarchy CRUD, tree code generation, bulk/CSV/grid import, soft-delete, tree events, farm-scoped ABAC (positive + negative)
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Known follow-ups carried into Phase 5/6**: GPS is plain `lat`/`lng` floats, not PostGIS geometry — polygons, spatial queries, and geodesic grid placement are Phase 5 (GIS) work; `Tree.digital_twin_id` FK onto a generic `DigitalTwin` core table is Phase 6; list-level endpoints (`GET /farms`, `GET /trees` under a row) are tenant-wide-permission-gated only, not filtered per-farm ABAC scope — acceptable since every single-resource read/write already enforces `assert_farm_scope`, but a farm-scoped user will see 200 on a list call before individual scope checks apply if they drill into a farm they don't hold; revisit if this becomes a real multi-manager-per-tenant deployment concern.
