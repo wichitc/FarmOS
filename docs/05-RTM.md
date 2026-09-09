@@ -20,7 +20,7 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 | FR-CCTV / VIS (Vision AI) | BRD §7, SRS §5 | Phase 9 | 🟡 data model + human-review workflow + safety constraints implemented; inference is a stub (see Phase 9 checklist below) | No |
 | FR-DRONE (Drone) | BRD §8 | Phase 9 (adjacent) | ⚪ not started (C-priority, deferred — see Phase 9 checklist) | No |
 | FR-HEALTH (Crop Health/Disease) | BRD §9 | Phase 10 | 🟢 implemented (see Phase 10 checklist below) | No |
-| FR-YIELD / FR-HARV (Yield & Harvest) | BRD §10 | Phase 11 | ⚪ not started | No |
+| FR-YIELD / FR-HARV (Yield & Harvest) | BRD §10 | Phase 11 | 🟢 implemented (see Phase 11 checklist below) | No |
 | FR-WORK (Farm Work Management) | BRD §11 | Phase 3–4 (cross-cutting) / Phase 17 (mobile) | ⚪ not started | Partial (backlog) |
 | FR-ASSET (Asset & Machinery) | BRD §12 | Phase 12 | 🟢 seed exists (Equipment table, 10 types) | Yes (carried from MVP-adjacent Phase 6) |
 | FR-MNT / FR-PDM (Maintenance) | BRD §13 | Phase 12 | 🟡 rule-based health score exists, no WorkOrder | Partial |
@@ -272,3 +272,21 @@ Not in MVP, but fully buildable with real (non-stub) logic — unlike Phase 9, n
 - **`TreatmentPlan.work_task_ref`** is a free-text placeholder, not a real FK — Farm Work Management (`FR-WORK`) doesn't exist as a queryable entity yet (RTM: Phase 17), same treatment as `Fertilizer.stock_ref` for the not-yet-built Inventory module
 - **Soil condition** (named in FR-HEALTH-002's signal list) is not modeled anywhere in the platform yet and isn't wired into the risk engine's inputs — there's no soil-sensor/soil-test entity to source it from
 - **Real epidemiological/ML risk modeling** replacing `compute_disease_risk`'s placeholder threshold rules is Phase 15 (AI Platform) work behind the same function contract
+
+## Phase 11 completion checklist (Yield & Harvest)
+
+Not in MVP, but — like Phase 10 — fully buildable with real (non-stub) logic: no vendor/model decision was blocking it.
+
+- [x] Fruit lifecycle observations (FR-YIELD-001): `FruitObservation` per tree (`flowering → pollination → fruit_set → fruit_growth → maturity → harvest`) — kept as its own log rather than overloading Phase 4's `Tree.growth_stage`, which has a different (and missing "pollination") stage set — `backend/app/harvest/models.py`, migration `backend/alembic/versions/0011_yield_harvest.py`
+- [x] Yield roll-up (FR-YIELD-001's "Tree → Row → Plot → Farm → Crop → Season"): `GET /api/v1/harvest/farms/{farm_id}/yield-summary`, a live aggregation query over `HarvestLot` grouped by plot/season, not a separately maintained rollup table
+- [x] Yield forecasts are always a range, never a point number (FR-YIELD-002): `estimate_yield_range` (`backend/app/harvest/estimation.py`) returns `estimated_yield_kg_low`/`_high` + `confidence` + evidence, same "indicative defaults" treatment as `health.py`/`app.irrigation.recommendation`/`app.crophealth.risk`
+- [x] `HarvestLot`/`PackingLot` (FR-HARV-001, simplified — see deferral below) carry the traceability chain FR-HARV-002 requires
+- [x] **Consumer-facing traceability** (FR-HARV-002): `GET /api/v1/harvest/trace/{tenant_slug}/{qr_code}` is deliberately the platform's first **public, unauthenticated** endpoint — a shopper scanning packaging isn't a logged-in platform user. `tenant_slug` plays the same role it already plays in `POST /api/v1/auth/login`; only traceability-safe fields are exposed (no user IDs, no internal notes/cost data); resolves either a Packing Lot QR (→ its Harvest Lots) or a Harvest Lot QR directly (unpacked sale)
+- [x] RBAC: `harvest.observation.*`/`harvest.yield.*`/`harvest.lot.*` granted per role; the trace endpoint intentionally has no permission check at all (see above)
+- [x] Automated tests (`backend/tests/test_harvest.py`): yield-estimation unit tests (no DB, including the zero-input edge case), fruit observation lifecycle, yield forecast always a range, full harvest-lot → packing-lot → public trace round trip, direct-harvest-lot-QR trace, unknown-QR and unknown-tenant 404s, yield-summary aggregation, farm-scoped ABAC
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **FR-HARV-001's full `Plan → Task → Batch → Lot → Receipt → Grade → Packing Lot` pipeline** is simplified to `HarvestLot` (carrying `grade` directly) + `PackingLot` — the two entities the traceability chain actually needs. Plan/Task/Batch/Receipt are Farm Work Management (`FR-WORK`) territory (Phase 17), and building them here would pre-empt that phase's own design the same way a placeholder Disease Incident table would have pre-empted Phase 10's
+- **Real QR/barcode image rendering** — `qr_code` is a random opaque token (`secrets.token_urlsafe`), the value a real QR code would encode; generating the actual scannable image is a frontend/rendering concern
+- **RFID support (FR-HARV-001)** — not built; no RFID hardware/reader integration decided anywhere in the docs

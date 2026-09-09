@@ -14,6 +14,7 @@ from app.irrigation import models as irrigation_models  # noqa: F401
 from app.weather import models as weather_models  # noqa: F401
 from app.vision import models as vision_models  # noqa: F401
 from app.crophealth import models as crophealth_models  # noqa: F401
+from app.harvest import models as harvest_models  # noqa: F401
 from app import models as legacy_models  # noqa: F401
 
 config = context.config
