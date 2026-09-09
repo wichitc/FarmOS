@@ -94,13 +94,16 @@ def _seed_mandatory_approval_workflows(db: Session, tenant_id: str) -> None:
     diagnosis must never by itself trigger treatment), and
     `MaintenanceRequest` (Phase 12, `app.asset` - FR-MNT-002/FR-PDM-002: a
     WorkOrder is the "Approved Action" and is only ever created from an
-    approved request) can only reach `status="approved"` by going through
-    one of these."""
+    approved request), and `PurchaseRequest` (Phase 13, `app.inventory` -
+    FR-PROC-001: a PurchaseOrder is only ever issued from an approved
+    request) can only reach `status="approved"` by going through one of
+    these."""
     for entity_type, name in (
         ("irrigation_plan", "Irrigation Plan Approval"),
         ("fertigation_plan", "Fertigation Plan Approval"),
         ("treatment_plan", "Treatment Plan Approval"),
         ("maintenance_request", "Maintenance Request Approval"),
+        ("purchase_request", "Purchase Request Approval"),
     ):
         db.add(
             fm.WorkflowDefinition(

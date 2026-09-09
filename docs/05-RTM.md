@@ -24,7 +24,7 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 | FR-WORK (Farm Work Management) | BRD §11 | Phase 3–4 (cross-cutting) / Phase 17 (mobile) | ⚪ not started | Partial (backlog) |
 | FR-ASSET (Asset & Machinery) | BRD §12 | Phase 12 | 🟢 implemented as asset-category DigitalTwins (see Phase 12 checklist below) | Yes (carried from MVP-adjacent Phase 6) |
 | FR-MNT / FR-PDM (Maintenance) | BRD §13 | Phase 12 | 🟢 implemented — health.py rule engine reused, full MaintenanceRequest → WorkOrder lifecycle (see Phase 12 checklist below) | Partial |
-| FR-INV / FR-PROC (Inventory & Procurement) | BRD §14 | Phase 13 | ⚪ not started | No |
+| FR-INV / FR-PROC (Inventory & Procurement) | BRD §14 | Phase 13 | 🟢 implemented (see Phase 13 checklist below) | No |
 | FR-ACC / FR-PROF (Farm Accounting) | BRD §15 | Phase 14 | ⚪ not started | No |
 | FR-SALES (Sales & Customer) | BRD §16 | Phase 14 (adjacent) | ⚪ not started | No |
 | FR-AIML / FR-COPILOT / FR-AGENT (AI Platform) | BRD §17, SRS §4 | Phase 15 | 🟡 health.py is a rule-based placeholder for the ML contract | Partial (rule-engine placeholder only) |
@@ -309,3 +309,22 @@ MVP-relevant (carried from "MVP-adjacent Phase 6" per this table). Closes Risk R
 - **Linked documents/photos (FR-ASSET-001)** — stored as a plain list of reference strings in `TwinProperty`, not real uploaded files; MinIO is still unwired (same deferral as Phase 9's Vision AI frame storage)
 - **Legacy `Equipment`/`/api/equipment` cutover** — still deliberately untouched (documented since Phase 3); the new `/api/v1/assets` surface is additive, not a replacement of the live legacy endpoints the existing frontend depends on
 - **Real ML anomaly/failure-probability models** replacing `health.py`'s threshold rules is Phase 15 (AI Platform) work behind the same `compute_health_score` contract, per FR-PDM-001's own instruction
+
+## Phase 13 completion checklist (Inventory & Procurement)
+
+Not in MVP, S-priority throughout, no vendor/tech blockers — fully buildable, same as Phases 10/11.
+
+- [x] Item/UOM master, warehouse/bin, lot/expiry, valuation (FR-INV-001): `Item`/`Warehouse`/`StockLot` — `backend/app/inventory/models.py`, migration `backend/alembic/versions/0013_inventory_procurement.py`
+- [x] receipt/issue/transfer/return/adjustment/cycle-count (FR-INV-001): one `StockMovement.movement_type` enum + `backend/app/routers/v1/inventory.py::record_movement` rather than a table per movement type — transfer is handled specially (decrements the source lot, gets-or-creates the destination lot in the target warehouse); everything else is a signed `quantity_delta` against one lot, blocked from taking it negative
+- [x] Cost attribution (FR-INV-002): `StockMovement.reference_type`/`reference_id`, a generic pair (Work Order/Farm Task/Plot/Asset/Crop/Season) rather than six nullable FKs — same pattern as `Alert.entity_type`/`entity_id` (Phase 7)
+- [x] Min/max reorder point wired to real alerting: dropping a lot below `Item.min_qty` raises an `Alert` via Phase 7's existing infrastructure (idempotent — one open alert per item, not one per movement) rather than a separate low-stock mechanism
+- [x] Full `Purchase Request → Approval → RFQ → Vendor Comparison → PO → Receiving → Inspection → Inventory → Invoice Matching` pipeline (FR-PROC-001), collapsed to `PurchaseRequest` (approval-gated, same seeded-workflow pattern as every Phase 8/10/12 plan — `provision_tenant()` now also seeds a `purchase_request` `WorkflowDefinition`) → `PurchaseOrder` (the Approved Action, carrying receiving/inspection/invoice fields directly). A passed receipt inspection creates the `StockLot`/`StockMovement` automatically, closing the loop into real on-hand inventory
+- [x] Invoice matching: a simple tolerance check (`invoice_amount` vs `unit_price × received_quantity`, configurable `tolerance_pct`), same "indicative, not certified" treatment as every other placeholder scoring/matching function in this codebase — not real 3-way-match accounting logic
+- [x] `warehouse_officer` (previously a role with almost no real permissions) gets full inventory/procurement manage — matching its name, same treatment `maintenance_engineer` got in Phase 12
+- [x] Automated tests (`backend/tests/test_inventory.py`): item/warehouse CRUD, receive-creates-lot-and-movement, issue decrements + blocks over-issue, transfer between warehouses, reorder-point alert, valuation, full purchase-request → approve → issue-PO → receive → stock-created → invoice-match round trip, reject blocks PO issuance, seeded-workflow check, farm-scoped ABAC
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **RFQ / Vendor Comparison** — FR-PROC-001 names these as pipeline stages, but they're a pre-PO negotiation process with no persistent state of their own to model; `Vendor` master data exists for the eventual comparison UI to read from
+- **Reservation** (FR-INV-001) — stock reservation against a future planned consumption is not modeled; only actual movements are
+- **`Farm Task` cost-attribution reference** — like every other `FR-WORK` gap so far (Phase 10/11), `reference_type="farm_task"` is accepted but has no backing table; `reference_id` is an opaque string until Phase 17

@@ -17,6 +17,7 @@ from .routers.v1 import crophealth as crophealth_router_v1
 from .routers.v1 import farm as farm_router_v1
 from .routers.v1 import gis as gis_router_v1
 from .routers.v1 import harvest as harvest_router_v1
+from .routers.v1 import inventory as inventory_router_v1
 from .routers.v1 import iot as iot_router_v1
 from .routers.v1 import irrigation as irrigation_router_v1
 from .routers.v1 import master_data as master_data_router_v1
@@ -93,6 +94,7 @@ app.include_router(vision_router_v1.router)
 app.include_router(crophealth_router_v1.router)
 app.include_router(harvest_router_v1.router)
 app.include_router(asset_router_v1.router)
+app.include_router(inventory_router_v1.router)
 app.include_router(workflow_router_v1.router)
 app.include_router(notifications_router_v1.router)
 app.include_router(audit_router_v1.router)
