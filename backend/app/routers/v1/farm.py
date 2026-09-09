@@ -13,8 +13,31 @@ from ...farm import models as farm_models
 from ...farm import schemas as farm_schemas
 from ...foundation import models as fm
 from ...foundation.audit import record_audit
+from ...gis.geo import (
+    area_hectares_of,
+    boundary_wkt_of,
+    element_to_geojson,
+    geojson_to_element,
+    point_from_latlng,
+    point_in_wkt,
+    project_latlng,
+    row_bearing_rad,
+)
+from ...gis.schemas import BoundaryOut, CenterlineOut, GeoJSONGeometry
 
 router = APIRouter(prefix="/api/v1/farm", tags=["farm"])
+
+
+def _apply_boundary(db: Session, entity, table: str, geometry: GeoJSONGeometry) -> Optional[float]:
+    """Shared FR-GIS-001/005 logic: set a polygon `boundary` column and
+    recompute its geodesic area in hectares. `table` is always one of the
+    hardcoded literals passed by call sites below, never user input."""
+    entity.boundary = geojson_to_element(geometry.model_dump())
+    db.flush()
+    area = area_hectares_of(db, table, entity.id)
+    entity.area_hectares = area
+    db.flush()
+    return area
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +137,35 @@ def get_farm(
     return farm
 
 
+@router.patch("/farms/{farm_id}/boundary", response_model=BoundaryOut)
+def set_farm_boundary(
+    farm_id: str,
+    payload: GeoJSONGeometry,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("farm.manage")),
+):
+    """FR-GIS-001/002: draws/replaces the farm boundary polygon. Area
+    (FR-GIS-005 measure tool) is recomputed geodesically from the geometry,
+    overwriting whatever `area_hectares` was manually entered in Phase 4."""
+    farm = _get_or_404(db, farm_models.Farm, farm_id, "Farm")
+    assert_farm_scope(db, current_user, "farm.manage", farm.id)
+
+    farm.updated_by = current_user.id
+    area = _apply_boundary(db, farm, "farms", payload)
+
+    record_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        actor_user_id=current_user.id,
+        action="farm.set_boundary",
+        entity_type="farm",
+        entity_id=farm.id,
+        new_values={"area_hectares": area},
+    )
+    db.commit()
+    return {"id": farm.id, "boundary": element_to_geojson(farm.boundary), "area_hectares": area}
+
+
 # ---------------------------------------------------------------------------
 # Zones / Plots / Blocks / Rows - identical create+list shape at each level
 # ---------------------------------------------------------------------------
@@ -167,6 +219,32 @@ def list_zones(
     return db.query(farm_models.Zone).filter(farm_models.Zone.farm_id == farm_id).order_by(farm_models.Zone.code.asc()).all()
 
 
+@router.patch("/zones/{zone_id}/boundary", response_model=BoundaryOut)
+def set_zone_boundary(
+    zone_id: str,
+    payload: GeoJSONGeometry,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("farm.manage")),
+):
+    zone = _get_or_404(db, farm_models.Zone, zone_id, "Zone")
+    assert_farm_scope(db, current_user, "farm.manage", _farm_for_zone(zone).id)
+
+    zone.updated_by = current_user.id
+    area = _apply_boundary(db, zone, "zones", payload)
+
+    record_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        actor_user_id=current_user.id,
+        action="zone.set_boundary",
+        entity_type="zone",
+        entity_id=zone.id,
+        new_values={"area_hectares": area},
+    )
+    db.commit()
+    return {"id": zone.id, "boundary": element_to_geojson(zone.boundary), "area_hectares": area}
+
+
 @router.post("/zones/{zone_id}/plots", response_model=farm_schemas.PlotOut, status_code=201)
 def create_plot(
     zone_id: str,
@@ -215,6 +293,32 @@ def list_plots(
     zone = _get_or_404(db, farm_models.Zone, zone_id, "Zone")
     assert_farm_scope(db, user, "farm.view", _farm_for_zone(zone).id)
     return db.query(farm_models.Plot).filter(farm_models.Plot.zone_id == zone_id).order_by(farm_models.Plot.code.asc()).all()
+
+
+@router.patch("/plots/{plot_id}/boundary", response_model=BoundaryOut)
+def set_plot_boundary(
+    plot_id: str,
+    payload: GeoJSONGeometry,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("farm.manage")),
+):
+    plot = _get_or_404(db, farm_models.Plot, plot_id, "Plot")
+    assert_farm_scope(db, current_user, "farm.manage", _farm_for_plot(plot).id)
+
+    plot.updated_by = current_user.id
+    area = _apply_boundary(db, plot, "plots", payload)
+
+    record_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        actor_user_id=current_user.id,
+        action="plot.set_boundary",
+        entity_type="plot",
+        entity_id=plot.id,
+        new_values={"area_hectares": area},
+    )
+    db.commit()
+    return {"id": plot.id, "boundary": element_to_geojson(plot.boundary), "area_hectares": area}
 
 
 @router.post("/plots/{plot_id}/blocks", response_model=farm_schemas.BlockOut, status_code=201)
@@ -267,6 +371,32 @@ def list_blocks(
     return db.query(farm_models.Block).filter(farm_models.Block.plot_id == plot_id).order_by(farm_models.Block.code.asc()).all()
 
 
+@router.patch("/blocks/{block_id}/boundary", response_model=BoundaryOut)
+def set_block_boundary(
+    block_id: str,
+    payload: GeoJSONGeometry,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("farm.manage")),
+):
+    block = _get_or_404(db, farm_models.Block, block_id, "Block")
+    assert_farm_scope(db, current_user, "farm.manage", _farm_for_block(block).id)
+
+    block.updated_by = current_user.id
+    area = _apply_boundary(db, block, "blocks", payload)
+
+    record_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        actor_user_id=current_user.id,
+        action="block.set_boundary",
+        entity_type="block",
+        entity_id=block.id,
+        new_values={"area_hectares": area},
+    )
+    db.commit()
+    return {"id": block.id, "boundary": element_to_geojson(block.boundary), "area_hectares": area}
+
+
 @router.post("/blocks/{block_id}/rows", response_model=farm_schemas.RowOut, status_code=201)
 def create_row(
     block_id: str,
@@ -315,6 +445,33 @@ def list_rows(
     block = _get_or_404(db, farm_models.Block, block_id, "Block")
     assert_farm_scope(db, user, "farm.view", _farm_for_block(block).id)
     return db.query(farm_models.Row).filter(farm_models.Row.block_id == block_id).order_by(farm_models.Row.code.asc()).all()
+
+
+@router.patch("/rows/{row_id}/centerline", response_model=CenterlineOut)
+def set_row_centerline(
+    row_id: str,
+    payload: GeoJSONGeometry,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("farm.manage")),
+):
+    row = _get_or_404(db, farm_models.Row, row_id, "Row")
+    farm, _block, _plot, _zone = _hierarchy_for_row(row)
+    assert_farm_scope(db, current_user, "farm.manage", farm.id)
+
+    row.centerline = geojson_to_element(payload.model_dump())
+    row.updated_by = current_user.id
+    db.flush()
+
+    record_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        actor_user_id=current_user.id,
+        action="row.set_centerline",
+        entity_type="row",
+        entity_id=row.id,
+    )
+    db.commit()
+    return {"id": row.id, "centerline": element_to_geojson(row.centerline)}
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +525,7 @@ def _build_tree(
         growth_stage=payload.growth_stage,
         lat=payload.lat,
         lng=payload.lng,
+        location=point_from_latlng(payload.lat, payload.lng),
         notes=payload.notes,
         created_by=current_user.id,
         updated_by=current_user.id,
@@ -552,25 +710,40 @@ def generate_tree_grid(
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("tree.manage")),
 ):
-    """FR-FARM-006 grid-spacing generation: lays out `count` trees along the
-    row, `spacing_m` apart, starting from (start_lat, start_lng) if given.
-    `spacing_m` is treated as a straight offset in degrees-of-latitude*1e-5
-    scale placeholder - real geodesic placement (bearing along the row's
-    actual orientation) is a Phase 5 GIS concern once plot/row polygons
-    exist; this satisfies FR-FARM-006 without inventing spatial math Phase 5
-    will own."""
+    """FR-FARM-006 / FR-GIS-006 grid-spacing generation: lays out `count`
+    trees along the row, `spacing_m` apart geodesically (real meters, via
+    PostGIS `ST_Project` - see `app.gis.geo.project_latlng`), starting from
+    (start_lat, start_lng) if given. Direction follows the row's `centerline`
+    bearing when one has been drawn (`PATCH .../rows/{row_id}/centerline`),
+    else defaults to north - Phase 4's original placeholder direction, kept
+    for backward compatibility with rows that have no centerline yet. When
+    the row's plot has a `boundary` polygon, candidate points outside it are
+    skipped so trees only land inside the plot; without a boundary every
+    candidate is used (unchanged from Phase 4)."""
     if payload.count < 1:
         raise HTTPException(status_code=422, detail="count must be at least 1")
 
     row = _get_or_404(db, farm_models.Row, row_id, "Row")
-    farm, block, _plot, _zone = _hierarchy_for_row(row)
+    farm, block, plot, _zone = _hierarchy_for_row(row)
     assert_farm_scope(db, current_user, "tree.manage", farm.id)
+
+    boundary_wkt = boundary_wkt_of(db, "plots", plot.id) if payload.start_lat is not None else None
+    bearing = row_bearing_rad(db, row.id) if payload.start_lat is not None else 0.0
 
     seq = _next_tree_seq(db, row.id)
     trees = []
-    for i in range(payload.count):
-        lat = payload.start_lat + (i * payload.spacing_m * 1e-5) if payload.start_lat is not None else None
-        lng = payload.start_lng
+    placed = 0
+    candidate = 0
+    max_candidates = payload.count * 20  # safety cap so a tiny/misaligned boundary can't loop forever
+    while placed < payload.count and candidate < max_candidates:
+        if payload.start_lat is not None:
+            lat, lng = project_latlng(db, payload.start_lat, payload.start_lng, candidate * payload.spacing_m, bearing)
+            if boundary_wkt is not None and not point_in_wkt(db, boundary_wkt, lat, lng):
+                candidate += 1
+                continue
+        else:
+            lat, lng = None, None
+
         tree_payload = farm_schemas.TreeCreate(
             crop_id=payload.crop_id,
             variety_id=payload.variety_id,
@@ -582,6 +755,14 @@ def generate_tree_grid(
         db.add(tree)
         trees.append(tree)
         seq += 1
+        placed += 1
+        candidate += 1
+
+    if placed < payload.count:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Only {placed} of {payload.count} requested points fit inside the plot boundary",
+        )
 
     try:
         db.flush()
@@ -628,6 +809,8 @@ def update_tree(
     changes = payload.model_dump(exclude_unset=True)
     for field, value in changes.items():
         setattr(tree, field, value)
+    if "lat" in changes or "lng" in changes:
+        tree.location = point_from_latlng(tree.lat, tree.lng)
     tree.updated_by = current_user.id
 
     try:

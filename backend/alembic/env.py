@@ -7,6 +7,7 @@ from app.config import settings
 from app.database import Base
 from app.foundation import models as foundation_models  # noqa: F401
 from app.farm import models as farm_models  # noqa: F401
+from app.gis import models as gis_models  # noqa: F401
 from app import models as legacy_models  # noqa: F401
 
 config = context.config

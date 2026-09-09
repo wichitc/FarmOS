@@ -13,7 +13,7 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 |---|---|---|---|---|
 | FR-PLT (Platform Foundation) | BRD §1 | Phase 3 | 🟢 implemented (see Phase 3 checklist below) | Yes |
 | FR-FARM (Farm & Crop Domain) | BRD §2 | Phase 4 | 🟢 implemented (see Phase 4 checklist below) | Yes |
-| FR-GIS / GIS (GIS & Spatial) | BRD §3, SRS §2 | Phase 5 | ⚪ not started | Partial (basic map only) |
+| FR-GIS / GIS (GIS & Spatial) | BRD §3, SRS §2 | Phase 5 | 🟢 backend implemented (see Phase 5 checklist below); map client pending frontend rewrite | Partial (basic map only) |
 | FR-TWIN / TWIN (Digital Twin & 3D) | BRD §4, SRS §1 | Phase 6 | 🟢 seed exists (IFC viewer) | Yes |
 | FR-IOT / IOT (IoT Platform) | BRD §5, SRS §3 | Phase 7 | ⚪ not started (manual condition fields only) | Yes (simulator-driven) |
 | FR-IRR / FR-FERT (Irrigation & Fertigation) | BRD §6 | Phase 8 | ⚪ not started | Yes (manual-approval mode) |
@@ -150,4 +150,20 @@ No business-feature code is written against this architecture until sign-off, pe
 - [x] Automated tests (`backend/tests/test_farm.py`): full hierarchy CRUD, tree code generation, bulk/CSV/grid import, soft-delete, tree events, farm-scoped ABAC (positive + negative)
 - [ ] Stakeholder review/sign-off — **pending, human step**
 
-**Known follow-ups carried into Phase 5/6**: GPS is plain `lat`/`lng` floats, not PostGIS geometry — polygons, spatial queries, and geodesic grid placement are Phase 5 (GIS) work; `Tree.digital_twin_id` FK onto a generic `DigitalTwin` core table is Phase 6; list-level endpoints (`GET /farms`, `GET /trees` under a row) are tenant-wide-permission-gated only, not filtered per-farm ABAC scope — acceptable since every single-resource read/write already enforces `assert_farm_scope`, but a farm-scoped user will see 200 on a list call before individual scope checks apply if they drill into a farm they don't hold; revisit if this becomes a real multi-manager-per-tenant deployment concern.
+**Known follow-ups carried into Phase 5/6**: ~~GPS is plain `lat`/`lng` floats, not PostGIS geometry — polygons, spatial queries, and geodesic grid placement are Phase 5 (GIS) work~~ — closed by Phase 5, see below; `Tree.digital_twin_id` FK onto a generic `DigitalTwin` core table is still Phase 6; list-level endpoints (`GET /farms`, `GET /trees` under a row) are tenant-wide-permission-gated only, not filtered per-farm ABAC scope — acceptable since every single-resource read/write already enforces `assert_farm_scope`, but a farm-scoped user will see 200 on a list call before individual scope checks apply if they drill into a farm they don't hold; revisit if this becomes a real multi-manager-per-tenant deployment concern.
+
+## Phase 5 completion checklist (GIS & Spatial)
+
+- [x] PostGIS enabled and geometry columns added to the Phase-4 hierarchy: `boundary` (Polygon) on `Farm`/`Zone`/`Plot`/`Block`, `centerline` (LineString) on `Row`, `location` (Point) on `Tree` (kept in sync with the existing `lat`/`lng` floats, which remain the public API's source of truth) — `backend/app/farm/models.py`, migration `backend/alembic/versions/0005_gis.py` — GIS-001
+- [x] Draw/edit polygon/line/point via GeoJSON: `PATCH .../{farm,zone,plot,block}/boundary` and `.../rows/{row_id}/centerline` in `backend/app/routers/v1/farm.py`, all audited — FR-GIS-002, GIS-003
+- [x] Infrastructure layer entity `MapFeature` (road/drain/pond/pipe/pump/valve/cctv/sensor/building/other) with full CRUD — `backend/app/gis/models.py`, `backend/app/routers/v1/gis.py` — FR-GIS-001. Same "shape now, formalize later" placeholder pattern as `TreeEvent` (Phase 4), ahead of the generic `DigitalTwin`/`TwinType` graph in Phase 6
+- [x] GeoJSON import/export: `GET/POST /api/v1/gis/farms/{farm_id}/{export,import}` — FR-GIS-003 (GeoJSON only; KML/Shapefile deferred, see below)
+- [x] Layer manager catalog (`GET /api/v1/gis/farms/{farm_id}/layers`, counts per layer type) and a stateless ad-hoc measure tool (`POST /api/v1/gis/measure`, area or length via real PostGIS geodesic calculation) — FR-GIS-005
+- [x] Persisted boundaries auto-compute geodesic area in hectares (`ST_Area(boundary::geography)`), overwriting the Phase-4 manually-entered value — FR-GIS-005
+- [x] Bulk tree placement upgraded from Phase 4's placeholder degree-offset math to real meter-spaced geodesic placement (`ST_Project`) along the row's centerline bearing (or north, if none drawn yet), clipped to the plot's boundary when one exists — `generate_tree_grid` in `backend/app/routers/v1/farm.py` — FR-GIS-006
+- [x] Spatial query `GET /api/v1/gis/trees/nearby` (`ST_DWithin`/`ST_Distance` on `Tree.location`) — FR-GIS-007
+- [x] RBAC: reuses the existing `farm.view`/`farm.manage` permissions and `assert_farm_scope` ABAC helper from Phase 4 — no new permissions needed
+- [x] Automated tests (`backend/tests/test_gis.py`): boundary set + audited + area computed, zone/plot/block boundary and row centerline, map feature CRUD, GeoJSON export/import round-trip, ad-hoc measure (area + length), nearby-trees radius search, boundary-clipped grid generation (both the success and the "doesn't fit" 422 path)
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Known follow-ups carried into the frontend-rewrite phase**: the MapLibre GL map client SRS GIS-002 calls for (layer manager UI, interactive draw/edit with snapping, raster orthophoto overlay) is not built — this phase is backend-only, same precedent as Phases 3-4, since the frontend is still the legacy vanilla-JS app pending its own migration (`docs/00-EXISTING-CODEBASE-ANALYSIS.md` §4); the backend endpoints above (`/api/v1/gis/*`, `PATCH .../boundary`) are exactly what that future client will call. KML/Shapefile import (FR-GIS-003) is deferred — both need `fiona`/GDAL, a much heavier container dependency than GeoJSON's zero-extra-deps path; add if/when a real farm survey delivers one of those formats. Layer-visibility persistence (which layers a user last had toggled on) is frontend/UI state, not modeled here.

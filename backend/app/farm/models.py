@@ -14,6 +14,7 @@ core table (docs/08-DATA-ARCHITECTURE.md §6) - deliberately not built here.
 from datetime import date, datetime
 from typing import Optional
 
+from geoalchemy2 import Geometry
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -48,6 +49,7 @@ class Farm(TenantScopedMixin, Base):
     lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     area_hectares: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active")
+    boundary = mapped_column(Geometry(geometry_type="POLYGON", srid=4326), nullable=True)
 
     zones: Mapped[list["Zone"]] = relationship(back_populates="farm", cascade="all, delete-orphan")
     seasons: Mapped[list["Season"]] = relationship(back_populates="farm", cascade="all, delete-orphan")
@@ -61,6 +63,7 @@ class Zone(TenantScopedMixin, Base):
     farm_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("farms.id", ondelete="CASCADE"), index=True)
     code: Mapped[str] = mapped_column(String(50))
     name: Mapped[str] = mapped_column(String(255))
+    boundary = mapped_column(Geometry(geometry_type="POLYGON", srid=4326), nullable=True)
 
     farm: Mapped["Farm"] = relationship(back_populates="zones")
     plots: Mapped[list["Plot"]] = relationship(back_populates="zone", cascade="all, delete-orphan")
@@ -75,6 +78,7 @@ class Plot(TenantScopedMixin, Base):
     code: Mapped[str] = mapped_column(String(50))
     name: Mapped[str] = mapped_column(String(255))
     area_hectares: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    boundary = mapped_column(Geometry(geometry_type="POLYGON", srid=4326), nullable=True)
 
     zone: Mapped["Zone"] = relationship(back_populates="plots")
     blocks: Mapped[list["Block"]] = relationship(back_populates="plot", cascade="all, delete-orphan")
@@ -89,6 +93,7 @@ class Block(TenantScopedMixin, Base):
     code: Mapped[str] = mapped_column(String(50))
     name: Mapped[str] = mapped_column(String(255))
     area_hectares: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    boundary = mapped_column(Geometry(geometry_type="POLYGON", srid=4326), nullable=True)
 
     plot: Mapped["Plot"] = relationship(back_populates="blocks")
     rows_: Mapped[list["Row"]] = relationship(back_populates="block", cascade="all, delete-orphan")
@@ -103,6 +108,7 @@ class Row(TenantScopedMixin, Base):
     code: Mapped[str] = mapped_column(String(50))
     name: Mapped[str] = mapped_column(String(255))
     spacing_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    centerline = mapped_column(Geometry(geometry_type="LINESTRING", srid=4326), nullable=True)
 
     block: Mapped["Block"] = relationship(back_populates="rows_")
     trees: Mapped[list["Tree"]] = relationship(back_populates="row", cascade="all, delete-orphan")
@@ -128,6 +134,7 @@ class Tree(TenantScopedMixin, Base):
     growth_stage: Mapped[str] = mapped_column(String(20), default="seedling")
     lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    location = mapped_column(Geometry(geometry_type="POINT", srid=4326), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active")
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
