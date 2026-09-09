@@ -89,14 +89,18 @@ def _seed_mandatory_approval_workflows(db: Session, tenant_id: str) -> None:
     at provisioning time (rather than requiring a tenant admin to configure
     them) is what makes that floor structural instead of something a tenant
     could simply forget to set up - `IrrigationPlan`/`FertigationPlan`
-    (Phase 8, `app.irrigation`) and `TreatmentPlan` (Phase 10,
-    `app.crophealth` - FR-HEALTH-003, cross-referenced by FR-CCTV-005: an AI
-    disease diagnosis must never by itself trigger treatment) can only reach
-    `status="approved"` by going through one of these."""
+    (Phase 8, `app.irrigation`), `TreatmentPlan` (Phase 10, `app.crophealth`
+    - FR-HEALTH-003, cross-referenced by FR-CCTV-005: an AI disease
+    diagnosis must never by itself trigger treatment), and
+    `MaintenanceRequest` (Phase 12, `app.asset` - FR-MNT-002/FR-PDM-002: a
+    WorkOrder is the "Approved Action" and is only ever created from an
+    approved request) can only reach `status="approved"` by going through
+    one of these."""
     for entity_type, name in (
         ("irrigation_plan", "Irrigation Plan Approval"),
         ("fertigation_plan", "Fertigation Plan Approval"),
         ("treatment_plan", "Treatment Plan Approval"),
+        ("maintenance_request", "Maintenance Request Approval"),
     ):
         db.add(
             fm.WorkflowDefinition(

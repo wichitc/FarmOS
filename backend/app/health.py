@@ -1,4 +1,6 @@
+from dataclasses import dataclass, field
 from datetime import date
+from typing import Optional
 
 from .models import Equipment
 from .schemas import HealthOut, HealthMetric
@@ -44,56 +46,80 @@ def _band_for(value: float, warn: float, crit: float) -> str:
     return "critical"
 
 
-def compute_health(eq: Equipment) -> HealthOut:
-    cfg = THRESHOLDS.get(eq.type, DEFAULT_THRESHOLD)
-    label = LABELS_TH.get(eq.type, eq.type)
+@dataclass
+class HealthScoreResult:
+    score: int
+    band: str
+    summary: str
+    metrics: list[HealthMetric] = field(default_factory=list)
+    recommendations: list[str] = field(default_factory=list)
+
+
+def compute_health_score(
+    *,
+    asset_type: str,
+    temperature_c: Optional[float],
+    vibration_mm_s: Optional[float],
+    status: str,
+    last_maintenance_date: Optional[date],
+    install_date: Optional[date],
+) -> HealthScoreResult:
+    """FR-PDM-001's interim implementation contract: a rule-based score/band/
+    recommendation engine, expected to be replaced by a real ML model behind
+    this same output shape (Phase 15), not rewritten from scratch. Takes
+    plain values rather than an ORM object so both the legacy `Equipment`
+    table (`compute_health` below) and Phase 12's asset-twin `HealthAssessment`
+    (`app.asset.health_engine`) share the one engine instead of each having
+    its own copy."""
+    cfg = THRESHOLDS.get(asset_type, DEFAULT_THRESHOLD)
+    label = LABELS_TH.get(asset_type, asset_type)
     score = 100
     recommendations: list[str] = []
     metrics: list[HealthMetric] = []
 
     temp_cfg = cfg.get("temp")
     if temp_cfg:
-        if eq.temperature_c is not None:
+        if temperature_c is not None:
             warn, crit = temp_cfg
-            band = _band_for(eq.temperature_c, warn, crit)
-            metrics.append(HealthMetric(label="อุณหภูมิ", value=eq.temperature_c, unit="°C", band=band))
+            band = _band_for(temperature_c, warn, crit)
+            metrics.append(HealthMetric(label="อุณหภูมิ", value=temperature_c, unit="°C", band=band))
             if band == "warning":
                 score -= 15
                 recommendations.append(
-                    f"อุณหภูมิของ{label} ({eq.temperature_c:.1f}°C) สูงกว่าเกณฑ์ปกติ "
+                    f"อุณหภูมิของ{label} ({temperature_c:.1f}°C) สูงกว่าเกณฑ์ปกติ "
                     "ควรตรวจสอบระบบระบายความร้อนและการหล่อลื่น"
                 )
             elif band == "critical":
                 score -= 35
                 recommendations.append(
-                    f"อุณหภูมิของ{label} ({eq.temperature_c:.1f}°C) สูงถึงระดับวิกฤต ควรหยุดตรวจสอบโดยด่วน"
+                    f"อุณหภูมิของ{label} ({temperature_c:.1f}°C) สูงถึงระดับวิกฤต ควรหยุดตรวจสอบโดยด่วน"
                 )
         else:
             metrics.append(HealthMetric(label="อุณหภูมิ", value=None, unit="°C", band="unknown"))
 
     vib_cfg = cfg.get("vib")
     if vib_cfg:
-        if eq.vibration_mm_s is not None:
+        if vibration_mm_s is not None:
             warn, crit = vib_cfg
-            band = _band_for(eq.vibration_mm_s, warn, crit)
-            metrics.append(HealthMetric(label="การสั่นสะเทือน", value=eq.vibration_mm_s, unit="mm/s", band=band))
+            band = _band_for(vibration_mm_s, warn, crit)
+            metrics.append(HealthMetric(label="การสั่นสะเทือน", value=vibration_mm_s, unit="mm/s", band=band))
             if band == "warning":
                 score -= 15
                 recommendations.append(
-                    f"ค่าการสั่นสะเทือนของ{label} ({eq.vibration_mm_s:.1f} mm/s) สูงกว่าเกณฑ์ปกติ "
+                    f"ค่าการสั่นสะเทือนของ{label} ({vibration_mm_s:.1f} mm/s) สูงกว่าเกณฑ์ปกติ "
                     "ควรตรวจสอบความสมดุลและตลับลูกปืน (bearing)"
                 )
             elif band == "critical":
                 score -= 35
                 recommendations.append(
-                    f"ค่าการสั่นสะเทือนของ{label} ({eq.vibration_mm_s:.1f} mm/s) อยู่ในระดับวิกฤต "
+                    f"ค่าการสั่นสะเทือนของ{label} ({vibration_mm_s:.1f} mm/s) อยู่ในระดับวิกฤต "
                     "เสี่ยงต่อความเสียหาย ควรหยุดเครื่องตรวจสอบ"
                 )
         else:
             metrics.append(HealthMetric(label="การสั่นสะเทือน", value=None, unit="mm/s", band="unknown"))
 
     interval_days = cfg.get("interval_days") or 365
-    ref_date = eq.last_maintenance_date or eq.install_date
+    ref_date = last_maintenance_date or install_date
     if ref_date:
         days_since = (date.today() - ref_date).days
         ratio = days_since / interval_days
@@ -117,10 +143,10 @@ def compute_health(eq: Equipment) -> HealthOut:
         metrics.append(HealthMetric(label="วันบำรุงรักษาล่าสุด", value=None, unit="วัน", band="unknown"))
         recommendations.append(f"ยังไม่มีข้อมูลวันบำรุงรักษาของ{label} กรุณาบันทึกวันที่บำรุงรักษาล่าสุด")
 
-    if eq.status == "fault":
+    if status == "fault":
         score = min(score, 20)
         recommendations.insert(0, f"{label}อยู่ในสถานะ Fault ควรหยุดใช้งานและตรวจสอบทันที")
-    elif eq.status == "maintenance":
+    elif status == "maintenance":
         recommendations.insert(0, f"{label}กำลังอยู่ระหว่างการบำรุงรักษา")
 
     score = max(0, min(100, round(score)))
@@ -138,11 +164,27 @@ def compute_health(eq: Equipment) -> HealthOut:
     if not recommendations:
         recommendations.append(f"{label}อยู่ในสภาพดี ไม่มีคำแนะนำเพิ่มเติมในขณะนี้")
 
+    return HealthScoreResult(
+        score=score, band=overall_band, summary=summary, metrics=metrics, recommendations=recommendations
+    )
+
+
+def compute_health(eq: Equipment) -> HealthOut:
+    """Legacy call site (`routers/equipment.py`, `routers/dashboard.py`) -
+    unchanged behavior/signature, now a thin wrapper over the shared engine."""
+    result = compute_health_score(
+        asset_type=eq.type,
+        temperature_c=eq.temperature_c,
+        vibration_mm_s=eq.vibration_mm_s,
+        status=eq.status,
+        last_maintenance_date=eq.last_maintenance_date,
+        install_date=eq.install_date,
+    )
     return HealthOut(
         equipment_id=eq.id,
-        score=score,
-        band=overall_band,
-        summary=summary,
-        metrics=metrics,
-        recommendations=recommendations,
+        score=result.score,
+        band=result.band,
+        summary=result.summary,
+        metrics=result.metrics,
+        recommendations=result.recommendations,
     )

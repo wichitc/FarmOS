@@ -22,8 +22,8 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 | FR-HEALTH (Crop Health/Disease) | BRD §9 | Phase 10 | 🟢 implemented (see Phase 10 checklist below) | No |
 | FR-YIELD / FR-HARV (Yield & Harvest) | BRD §10 | Phase 11 | 🟢 implemented (see Phase 11 checklist below) | No |
 | FR-WORK (Farm Work Management) | BRD §11 | Phase 3–4 (cross-cutting) / Phase 17 (mobile) | ⚪ not started | Partial (backlog) |
-| FR-ASSET (Asset & Machinery) | BRD §12 | Phase 12 | 🟢 seed exists (Equipment table, 10 types) | Yes (carried from MVP-adjacent Phase 6) |
-| FR-MNT / FR-PDM (Maintenance) | BRD §13 | Phase 12 | 🟡 rule-based health score exists, no WorkOrder | Partial |
+| FR-ASSET (Asset & Machinery) | BRD §12 | Phase 12 | 🟢 implemented as asset-category DigitalTwins (see Phase 12 checklist below) | Yes (carried from MVP-adjacent Phase 6) |
+| FR-MNT / FR-PDM (Maintenance) | BRD §13 | Phase 12 | 🟢 implemented — health.py rule engine reused, full MaintenanceRequest → WorkOrder lifecycle (see Phase 12 checklist below) | Partial |
 | FR-INV / FR-PROC (Inventory & Procurement) | BRD §14 | Phase 13 | ⚪ not started | No |
 | FR-ACC / FR-PROF (Farm Accounting) | BRD §15 | Phase 14 | ⚪ not started | No |
 | FR-SALES (Sales & Customer) | BRD §16 | Phase 14 (adjacent) | ⚪ not started | No |
@@ -290,3 +290,22 @@ Not in MVP, but — like Phase 10 — fully buildable with real (non-stub) logic
 - **FR-HARV-001's full `Plan → Task → Batch → Lot → Receipt → Grade → Packing Lot` pipeline** is simplified to `HarvestLot` (carrying `grade` directly) + `PackingLot` — the two entities the traceability chain actually needs. Plan/Task/Batch/Receipt are Farm Work Management (`FR-WORK`) territory (Phase 17), and building them here would pre-empt that phase's own design the same way a placeholder Disease Incident table would have pre-empted Phase 10's
 - **Real QR/barcode image rendering** — `qr_code` is a random opaque token (`secrets.token_urlsafe`), the value a real QR code would encode; generating the actual scannable image is a frontend/rendering concern
 - **RFID support (FR-HARV-001)** — not built; no RFID hardware/reader integration decided anywhere in the docs
+
+## Phase 12 completion checklist (Asset & Machinery + Maintenance / Predictive Maintenance)
+
+MVP-relevant (carried from "MVP-adjacent Phase 6" per this table). Closes Risk R-02 from `05-RTM.md`'s own risk register (the `Equipment` table's tree/asset conflation) on the asset side — trees were already split out in Phase 4; this phase gives assets their proper twin-based home too, per ADR-004 and the `docs/07-DOMAIN-MODEL.md` §3.2 design that was written back in Phase 1 but not implemented until now.
+
+- [x] **No new `Asset` table** (FR-ASSET-001): an asset is an asset-category `DigitalTwin`; manufacturer/model/serial/install-date/warranty/documents live in `TwinProperty`, condition (temperature/vibration/status) in `current_state` — exactly the shape `migrate_equipment_to_twins.py` (Phase 6) already populates, so already-migrated legacy equipment is immediately usable through this new API with no further data migration. `POST /api/v1/assets` is a convenience wrapper that creates the twin + standard properties in one call — `backend/app/asset/models.py` (just the three new entities below; no `Asset` model), `backend/app/routers/v1/asset.py`
+- [x] Meter/runtime tracking (FR-ASSET-002): no new table — reuses `TwinTelemetry` (Phase 6/7) via the existing `POST /api/v1/twins/{id}/telemetry`, same as any other sensor metric
+- [x] **`health.py`'s rule engine is reused, not duplicated** (FR-PDM-001's explicit instruction): refactored into `compute_health_score()` (plain parameters) with `compute_health(eq)` kept as an unchanged-behavior thin wrapper for the legacy `Equipment` endpoints (verified by `test_legacy_equipment_health_endpoint_still_works_after_refactor`); `app/asset/health_engine.py::assess_asset_health` adapts it to read from a twin's `current_state`/`TwinProperty` instead of an `Equipment` row — one engine, two callers
+- [x] `HealthAssessment` (FR-PDM-001/002's Prediction + Recommendation): a versioned, audited value object (`computed_at`, `score`, `band`, `metrics`, `recommendations`, `method_id`/`method_version`) — never a mutable field on the twin, so score history is never lost
+- [x] Full `MaintenanceRequest → (approval) → WorkOrder` lifecycle (FR-MNT-002): reuses the exact approval-gated pattern Phase 8/10 established — `provision_tenant()` now also seeds a `maintenance_request` `WorkflowDefinition`; a `WorkOrder` (FR-PDM-002's **Approved Action**, separate and separately-audited from the Prediction/Recommendation that led to it) can only be created by converting an `approved` request, never directly
+- [x] Corrective/preventive/predictive/condition-based strategies (FR-MNT-001): `MaintenanceRequest.strategy` enum
+- [x] RBAC: `asset.*`/`asset.maintenance.*` granted per role — `maintenance_engineer` (previously a role with almost no real permissions) gets full manage, matching its name
+- [x] Automated tests (`backend/tests/test_asset.py`): legacy health-endpoint regression check, asset registration + property storage, health assessment via the shared engine, full request→approve→convert→work-order→complete lifecycle, reject blocks conversion, seeded-workflow check, farm-scoped ABAC (an unscoped asset alongside a farm-scoped one, matching legacy `Equipment.model_id IS NULL`'s "unscoped" convention)
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **Linked documents/photos (FR-ASSET-001)** — stored as a plain list of reference strings in `TwinProperty`, not real uploaded files; MinIO is still unwired (same deferral as Phase 9's Vision AI frame storage)
+- **Legacy `Equipment`/`/api/equipment` cutover** — still deliberately untouched (documented since Phase 3); the new `/api/v1/assets` surface is additive, not a replacement of the live legacy endpoints the existing frontend depends on
+- **Real ML anomaly/failure-probability models** replacing `health.py`'s threshold rules is Phase 15 (AI Platform) work behind the same `compute_health_score` contract, per FR-PDM-001's own instruction
