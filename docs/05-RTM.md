@@ -19,7 +19,7 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 | FR-IRR / FR-FERT (Irrigation & Fertigation) | BRD §6 | Phase 8 | 🟢 implemented, manual-approval mode (see Phase 8 checklist below) | Yes (manual-approval mode) |
 | FR-CCTV / VIS (Vision AI) | BRD §7, SRS §5 | Phase 9 | 🟡 data model + human-review workflow + safety constraints implemented; inference is a stub (see Phase 9 checklist below) | No |
 | FR-DRONE (Drone) | BRD §8 | Phase 9 (adjacent) | ⚪ not started (C-priority, deferred — see Phase 9 checklist) | No |
-| FR-HEALTH (Crop Health/Disease) | BRD §9 | Phase 10 | ⚪ not started | No |
+| FR-HEALTH (Crop Health/Disease) | BRD §9 | Phase 10 | 🟢 implemented (see Phase 10 checklist below) | No |
 | FR-YIELD / FR-HARV (Yield & Harvest) | BRD §10 | Phase 11 | ⚪ not started | No |
 | FR-WORK (Farm Work Management) | BRD §11 | Phase 3–4 (cross-cutting) / Phase 17 (mobile) | ⚪ not started | Partial (backlog) |
 | FR-ASSET (Asset & Machinery) | BRD §12 | Phase 12 | 🟢 seed exists (Equipment table, 10 types) | Yes (carried from MVP-adjacent Phase 6) |
@@ -253,3 +253,22 @@ No business-feature code is written against this architecture until sign-off, pe
 - **Configurable per-camera sampling rate/retention (VIS-003)** — not built; moot without a real video pipeline to sample from
 - **Disease Incident creation from confirmed detections** — deliberately left to Phase 10 (`FR-HEALTH`), which owns the full Detected→...→Resolved lifecycle and shouldn't have that design pre-empted by a stub phase
 - **Drone (FR-DRONE)** — C-priority (lowest), not in MVP, zero infrastructure decided anywhere in the docs; skipped entirely this pass rather than building a placeholder with no real consumer
+
+## Phase 10 completion checklist (Crop Health & Disease)
+
+Not in MVP, but fully buildable with real (non-stub) logic — unlike Phase 9, nothing here needed an undecided vendor/model: the risk engine is rule-based over signals the platform already produces (Phase 8 weather, Phase 9 confirmed detections, incident history), and the approval mechanism is the same workflow engine Phase 8 already wired up.
+
+- [x] Disease/pest master data (`Disease`) — `backend/app/crophealth/models.py`, migration `backend/alembic/versions/0010_crop_health_disease.py`
+- [x] Full disease lifecycle per FR-HEALTH-001 (`detected → suspected → inspection_required → confirmed → treatment_planned → treatment_applied → monitoring → resolved`), with transitions validated against an explicit allowed-next-states map (`INCIDENT_ALLOWED_TRANSITIONS`) rather than left unconstrained
+- [x] **Closes Phase 9's explicit deferral**: `DiseaseIncident.source_detection_id` links a confirmed Vision AI detection to an incident; the router enforces FR-CCTV-004's requirement that only a `validation_status="confirmed"` detection can be used (verified by `test_incident_requires_confirmed_detection`)
+- [x] Treatment Plans (FR-HEALTH-003) reuse the exact approval-gated lifecycle Phase 8 introduced: `provision_tenant()` now also seeds a `treatment_plan` `WorkflowDefinition`, so a plan can only reach `approved` through `workflow_engine` — directly satisfies FR-CCTV-005's cross-reference ("an AI disease diagnosis shall never, by itself, trigger a pesticide/chemical application"), since there is still no code path anywhere in the platform from an AI detection straight to treatment execution
+- [x] Approving/executing a `TreatmentPlan` syncs the linked `DiseaseIncident`'s status forward (`treatment_planned` on approval, `treatment_applied` on execution) when that's a legal transition — verified by `test_treatment_plan_full_lifecycle_syncs_incident_status`
+- [x] Rule-based disease-risk engine (FR-HEALTH-002/004), same "indicative defaults" treatment as `health.py`/`app.irrigation.recommendation`: `backend/app/crophealth/risk.py::compute_disease_risk`, always returns `evidence` + `confidence` alongside the score, never a bare number. `POST /api/v1/crop-health/farms/{farm_id}/risk` wires it to real data: current weather readings (Phase 8), recent confirmed-incident counts, and recent confirmed Vision AI detection confidence (Phase 9)
+- [x] RBAC: `crophealth.disease.*`/`crophealth.incident.*`/`crophealth.treatment.*` granted per role (farm_owner/farm_manager/agronomist manage; field_worker can view+manage treatment execution but not incident diagnosis/lifecycle; viewer view-only)
+- [x] Automated tests (`backend/tests/test_crophealth.py`): risk-engine unit tests (no DB), disease master CRUD, incident lifecycle transition validation (valid and rejected), full treatment-plan lifecycle with incident-status sync, reject path blocks execution, seeded-workflow check, confirmed-detection-required check, risk endpoint combining real weather data, farm-scoped ABAC
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **`TreatmentPlan.work_task_ref`** is a free-text placeholder, not a real FK — Farm Work Management (`FR-WORK`) doesn't exist as a queryable entity yet (RTM: Phase 17), same treatment as `Fertilizer.stock_ref` for the not-yet-built Inventory module
+- **Soil condition** (named in FR-HEALTH-002's signal list) is not modeled anywhere in the platform yet and isn't wired into the risk engine's inputs — there's no soil-sensor/soil-test entity to source it from
+- **Real epidemiological/ML risk modeling** replacing `compute_disease_risk`'s placeholder threshold rules is Phase 15 (AI Platform) work behind the same function contract
