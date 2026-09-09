@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_minutes: int = 60 * 24 * 7
 
+    # IoT Platform (Phase 7). Mosquitto is `allow_anonymous true` in dev
+    # (infrastructure/mosquitto/mosquitto.conf) - per-device application-level
+    # secrets (IotDevice.hashed_secret) are the auth boundary for now; real
+    # broker-level mTLS/ACLs (SEC-006) are Phase 18 hardening work.
+    mqtt_host: str = "mqtt"
+    mqtt_port: int = 1883
+    iot_offline_check_interval_seconds: int = 60
+    iot_offline_timeout_seconds: int = 300
+
     model_config = SettingsConfigDict(env_file=str(BACKEND_DIR / ".env"), env_file_encoding="utf-8")
 
     @property

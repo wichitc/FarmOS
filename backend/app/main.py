@@ -14,6 +14,7 @@ from .routers.v1 import auth as auth_router_v1
 from .routers.v1 import config as config_router_v1
 from .routers.v1 import farm as farm_router_v1
 from .routers.v1 import gis as gis_router_v1
+from .routers.v1 import iot as iot_router_v1
 from .routers.v1 import master_data as master_data_router_v1
 from .routers.v1 import notifications as notifications_router_v1
 from .routers.v1 import roles as roles_router_v1
@@ -79,6 +80,7 @@ app.include_router(master_data_router_v1.router)
 app.include_router(farm_router_v1.router)
 app.include_router(gis_router_v1.router)
 app.include_router(twins_router_v1.router)
+app.include_router(iot_router_v1.router)
 app.include_router(workflow_router_v1.router)
 app.include_router(notifications_router_v1.router)
 app.include_router(audit_router_v1.router)

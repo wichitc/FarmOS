@@ -15,7 +15,7 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 | FR-FARM (Farm & Crop Domain) | BRD §2 | Phase 4 | 🟢 implemented (see Phase 4 checklist below) | Yes |
 | FR-GIS / GIS (GIS & Spatial) | BRD §3, SRS §2 | Phase 5 | 🟢 backend implemented (see Phase 5 checklist below); map client pending frontend rewrite | Partial (basic map only) |
 | FR-TWIN / TWIN (Digital Twin & 3D) | BRD §4, SRS §1 | Phase 6 | 🟡 backend Digital Twin Core implemented (see Phase 6 checklist below); IFC viewer is still the only 3D piece — Next.js/Cesium frontend work explicitly deferred | Yes |
-| FR-IOT / IOT (IoT Platform) | BRD §5, SRS §3 | Phase 7 | ⚪ not started (manual condition fields only) | Yes (simulator-driven) |
+| FR-IOT / IOT (IoT Platform) | BRD §5, SRS §3 | Phase 7 | 🟢 implemented (see Phase 7 checklist below) | Yes (simulator-driven) |
 | FR-IRR / FR-FERT (Irrigation & Fertigation) | BRD §6 | Phase 8 | ⚪ not started | Yes (manual-approval mode) |
 | FR-CCTV / VIS (Vision AI) | BRD §7, SRS §5 | Phase 9 | ⚪ not started | No |
 | FR-DRONE (Drone) | BRD §8 | Phase 9 (adjacent) | ⚪ not started | No |
@@ -28,7 +28,7 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 | FR-ACC / FR-PROF (Farm Accounting) | BRD §15 | Phase 14 | ⚪ not started | No |
 | FR-SALES (Sales & Customer) | BRD §16 | Phase 14 (adjacent) | ⚪ not started | No |
 | FR-AIML / FR-COPILOT / FR-AGENT (AI Platform) | BRD §17, SRS §4 | Phase 15 | 🟡 health.py is a rule-based placeholder for the ML contract | Partial (rule-engine placeholder only) |
-| FR-ALERT (Alerts) | BRD §18 | Phase 7 (with IoT) | ⚪ not started | Yes |
+| FR-ALERT (Alerts) | BRD §18 | Phase 7 (with IoT) | 🟢 implemented (ack/resolve; escalation/SLA deferred, see Phase 7 checklist) | Yes |
 | FR-WX (Weather) | BRD §19 | Phase 8 (with Irrigation) | ⚪ not started | Yes |
 | FR-DASH (Command Center) | BRD §20 | Phase 16 | 🟡 fleet health dashboard exists, not configurable | Yes (minimal) |
 | FR-MOB (Mobile/PWA) | BRD §21 | Phase 17 | ⚪ not started | No (post-MVP) |
@@ -191,3 +191,24 @@ No business-feature code is written against this architecture until sign-off, pe
 - **The Next.js/React/TS frontend shell (ADR-012) and CesiumJS orchard-scale 3D integration (ADR-005/006)** — full-stack work explicitly out of scope for this pass by user decision; this is the largest remaining piece of Phase 6 as originally scoped and should be picked up as its own dedicated effort, not folded into Phase 7
 - List-level `GET /api/v1/twins` (no `farm_id` filter) is tenant-wide-permission-gated only, same documented limitation as the Phase 4/5 list endpoints
 - `POST /{twin_id}/relationships` only ABAC-checks the `from` twin, not the `to` twin — a minor existence-oracle gap (a user could learn a `to_twin_id` exists via a 404-vs-201 response even without visibility into its farm), not a data-exposure one
+
+## Phase 7 completion checklist (IoT Platform + Alerts)
+
+- [x] Device/gateway registry (FR-IOT-001): `IotDevice` as a thin extension row on top of a `DigitalTwin` (ADR-004 — a Gateway is just an `IotDevice` with `protocol='gateway'` that other devices point `gateway_id` at) — `backend/app/iot/models.py`, migration `backend/alembic/versions/0007_iot_platform.py`
+- [x] Full ingestion pipeline per SRS IOT-001 (`Device → Gateway → MQTT → Ingestion service → Validation → Transformation → TimescaleDB → Rules Engine → Alert/Twin update`): `backend/app/scripts/mqtt_ingestion_worker.py` (new `iot-ingestion` docker-compose service) subscribes to `tenants/+/devices/+/telemetry` and calls the testable core in `backend/app/iot/ingestion.py::process_reading` for validate → store → twin-state update → rule evaluation → alert
+- [x] `twin_telemetry` (Phase 6 placeholder) is now a real TimescaleDB hypertable with a 90-day raw-retention policy, closing that phase's explicit deferral — ADR-002
+- [x] Duplicate-telemetry tolerance (IOT-003): `(twin_id, metric, recorded_at)` unique constraint + `ON CONFLICT DO NOTHING`, verified as a no-op rather than an error
+- [x] Sensor-offline detection as a first-class, idempotent alert condition (FR-IOT-004): `check_offline_devices`, run periodically inside the ingestion worker
+- [x] Threshold rules engine (FR-IOT-004/IOT-004), tenant/farm-configurable via `TwinType`+`metric`: `backend/app/iot/models.py::Rule`
+- [x] Alerts (FR-ALERT-001): generic `entity_type`/`entity_id`, severity, open/acknowledged/resolved lifecycle with actor+timestamp per transition — `backend/app/routers/v1/iot.py`
+- [x] Device simulator (FR-IOT-005, itself an MVP-blocking dev/test enabler): `backend/app/scripts/device_simulator.py`
+- [x] RBAC: `iot.device.{view,manage}`/`iot.rule.{view,manage}`/`alert.{view,manage}` added and granted per role (farm_owner/farm_manager/maintenance_engineer manage; agronomist/viewer view; field_worker gets `alert.manage` for acknowledge-in-the-field)
+- [x] Automated tests (`backend/tests/test_iot.py`): one-time secret reveal, happy-path ingestion updating twin state, wrong-secret rejection with no side effects, duplicate-reading no-op, rule breach → alert (and no duplicate open alert on a sustained breach) → acknowledge → resolve, offline detection + idempotency, farm-scoped ABAC on device endpoints
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **SEC-006 (per-device mTLS/broker ACLs)**: Mosquitto stays `allow_anonymous true` (dev default, `infrastructure/mosquitto/mosquitto.conf`); this phase's auth boundary is an application-level per-device secret (`IotDevice.hashed_secret`, checked in `process_reading`) rather than broker-enforced TLS client certs. Real broker hardening is Phase 18 per the RTM's own phase mapping for cross-cutting security work
+- **FR-ALERT-002 escalation/SLA timing** — ack/assign/resolve is built; SLA timers/auto-escalation need a scheduler this repo doesn't have yet
+- **Modbus/LoRaWAN/HTTP/WebSocket ingestion (FR-IOT-002)** — only the MQTT path is wired end-to-end; ADR-003 already assigns non-MQTT protocols to be bridged at the Edge Gateway (Phase 9/17 territory), not spoken directly by the core platform
+- **TimescaleDB continuous aggregates** (hourly/daily telemetry rollups) — not built; no dashboard consumes them yet
+- **Device calibration records (FR-IOT-006, S-priority)** — not built this pass

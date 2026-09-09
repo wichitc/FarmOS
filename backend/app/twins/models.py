@@ -120,16 +120,24 @@ class TwinEvent(Base):
 
 class TwinTelemetry(Base):
     """Append-only time-series (TWIN-004), keyed by (twin_id, metric,
-    recorded_at). Physically a plain table for now - TimescaleDB hypertable
-    conversion is a Phase 7 (IoT ingestion) concern once there's real
-    volume, per docs/08-DATA-ARCHITECTURE.md §1."""
+    recorded_at) - a real TimescaleDB hypertable as of Phase 7
+    (`0007_iot_platform.py`), per docs/08-DATA-ARCHITECTURE.md §1.
+
+    `recorded_at` is part of the primary key (composite with `id`) because
+    TimescaleDB requires every unique/primary-key constraint on a hypertable
+    to include its partitioning column - the same reason the dedup
+    constraint below is `(twin_id, metric, recorded_at)` rather than just
+    `(twin_id, metric)`."""
 
     __tablename__ = "twin_telemetry"
+    __table_args__ = (UniqueConstraint("twin_id", "metric", "recorded_at", name="uq_twin_telemetry_twin_metric_time"),)
 
-    id: Mapped[str] = _uuid_pk()
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
     tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("tenants.id"), nullable=False, index=True)
     twin_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("digital_twins.id", ondelete="CASCADE"), index=True)
     metric: Mapped[str] = mapped_column(String(100), index=True)
     value_numeric: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     value_text: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True, server_default=func.now()
+    )

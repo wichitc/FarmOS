@@ -72,6 +72,29 @@ services:
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
+  # IoT ingestion worker (Phase 7): MQTT -> validate -> store -> rules ->
+  # alerts (SRS IOT-001). Same image as `backend`, different entrypoint -
+  # no reason to duplicate the Dockerfile for one command difference.
+  iot-ingestion:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://durianos:durianos@db:5432/durianos
+      APP_DATABASE_URL: postgresql+psycopg://durianos_app:durianos_app@db:5432/durianos
+      SECRET_KEY: dev-only-insecure-secret-change-me
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+      backend:
+        condition: service_started
+    command: python -m app.scripts.mqtt_ingestion_worker
+
 volumes:
   db-data:
   minio-data:
