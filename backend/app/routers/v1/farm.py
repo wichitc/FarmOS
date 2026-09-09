@@ -24,8 +24,12 @@ from ...gis.geo import (
     row_bearing_rad,
 )
 from ...gis.schemas import BoundaryOut, CenterlineOut, GeoJSONGeometry
+from ...twins.models import DigitalTwin, TwinType
+from ...twins.service import create_twin, get_or_create_twin_type
 
 router = APIRouter(prefix="/api/v1/farm", tags=["farm"])
+
+TREE_TWIN_TYPE_CODE = "tree"
 
 
 def _apply_boundary(db: Session, entity, table: str, geometry: GeoJSONGeometry) -> Optional[float]:
@@ -499,6 +503,10 @@ def _resolve_crop_variety(db: Session, crop_id: str, variety_id: Optional[str]) 
     return crop, variety
 
 
+def _get_or_create_tree_twin_type(db: Session, tenant_id: str) -> TwinType:
+    return get_or_create_twin_type(db, tenant_id, code=TREE_TWIN_TYPE_CODE, name="Tree", category="tree")
+
+
 def _build_tree(
     db: Session,
     *,
@@ -508,14 +516,32 @@ def _build_tree(
     current_user: fm.User,
     payload: farm_schemas.TreeCreate,
     seq: int,
+    tree_twin_type: TwinType,
 ) -> farm_models.Tree:
     crop, variety = _resolve_crop_variety(db, payload.crop_id, payload.variety_id)
     code = payload.code or _default_tree_code(farm, block, row, seq, crop, variety)
+
+    # Phase 6 (FR-TWIN/TWIN-005): every Tree is simultaneously a Farm & Crop
+    # domain entity and a Digital Twin Core DigitalTwin (shared-kernel split,
+    # docs/07-DOMAIN-MODEL.md §3.3) - create the linked twin in the same
+    # transaction rather than leaving digital_twin_id null until a later
+    # backfill.
+    twin = create_twin(
+        db,
+        tenant_id=current_user.tenant_id,
+        twin_type=tree_twin_type,
+        display_code=code,
+        farm_id=farm.id,
+        current_state={"growth_stage": payload.growth_stage},
+        created_by=current_user.id,
+    )
+
     return farm_models.Tree(
         tenant_id=current_user.tenant_id,
         row_id=row.id,
         crop_id=crop.id,
         variety_id=variety.id if variety else None,
+        digital_twin_id=twin.id,
         code=code,
         planting_date=payload.planting_date,
         rootstock=payload.rootstock,
@@ -543,7 +569,11 @@ def create_tree(
     farm, block, _plot, _zone = _hierarchy_for_row(row)
     assert_farm_scope(db, current_user, "tree.manage", farm.id)
 
-    tree = _build_tree(db, row=row, farm=farm, block=block, current_user=current_user, payload=payload, seq=_next_tree_seq(db, row.id))
+    tree_twin_type = _get_or_create_tree_twin_type(db, current_user.tenant_id)
+    tree = _build_tree(
+        db, row=row, farm=farm, block=block, current_user=current_user, payload=payload,
+        seq=_next_tree_seq(db, row.id), tree_twin_type=tree_twin_type,
+    )
     db.add(tree)
     try:
         db.flush()
@@ -592,10 +622,14 @@ def bulk_create_trees(
     farm, block, _plot, _zone = _hierarchy_for_row(row)
     assert_farm_scope(db, current_user, "tree.manage", farm.id)
 
+    tree_twin_type = _get_or_create_tree_twin_type(db, current_user.tenant_id)
     seq = _next_tree_seq(db, row.id)
     trees = []
     for tree_payload in payload.trees:
-        tree = _build_tree(db, row=row, farm=farm, block=block, current_user=current_user, payload=tree_payload, seq=seq)
+        tree = _build_tree(
+            db, row=row, farm=farm, block=block, current_user=current_user, payload=tree_payload,
+            seq=seq, tree_twin_type=tree_twin_type,
+        )
         db.add(tree)
         trees.append(tree)
         seq += 1
@@ -636,6 +670,7 @@ async def import_trees_csv(
     raw = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(raw))
 
+    tree_twin_type = _get_or_create_tree_twin_type(db, current_user.tenant_id)
     seq = _next_tree_seq(db, row.id)
     trees = []
     for line_no, csv_row in enumerate(reader, start=2):
@@ -676,7 +711,10 @@ async def import_trees_csv(
             lng=_f("lng"),
             notes=(csv_row.get("notes") or "").strip() or None,
         )
-        tree = _build_tree(db, row=row, farm=farm, block=block, current_user=current_user, payload=payload, seq=seq)
+        tree = _build_tree(
+            db, row=row, farm=farm, block=block, current_user=current_user, payload=payload,
+            seq=seq, tree_twin_type=tree_twin_type,
+        )
         db.add(tree)
         trees.append(tree)
         seq += 1
@@ -730,6 +768,7 @@ def generate_tree_grid(
     boundary_wkt = boundary_wkt_of(db, "plots", plot.id) if payload.start_lat is not None else None
     bearing = row_bearing_rad(db, row.id) if payload.start_lat is not None else 0.0
 
+    tree_twin_type = _get_or_create_tree_twin_type(db, current_user.tenant_id)
     seq = _next_tree_seq(db, row.id)
     trees = []
     placed = 0
@@ -751,7 +790,10 @@ def generate_tree_grid(
             lat=lat,
             lng=lng,
         )
-        tree = _build_tree(db, row=row, farm=farm, block=block, current_user=current_user, payload=tree_payload, seq=seq)
+        tree = _build_tree(
+            db, row=row, farm=farm, block=block, current_user=current_user, payload=tree_payload,
+            seq=seq, tree_twin_type=tree_twin_type,
+        )
         db.add(tree)
         trees.append(tree)
         seq += 1
@@ -813,6 +855,15 @@ def update_tree(
         tree.location = point_from_latlng(tree.lat, tree.lng)
     tree.updated_by = current_user.id
 
+    if tree.digital_twin_id and ("growth_stage" in changes or "code" in changes):
+        twin = db.get(DigitalTwin, tree.digital_twin_id)
+        if twin:
+            if "growth_stage" in changes:
+                twin.current_state = {**twin.current_state, "growth_stage": tree.growth_stage}
+            if "code" in changes:
+                twin.display_code = tree.code
+            twin.updated_by = current_user.id
+
     try:
         db.flush()
     except IntegrityError as exc:
@@ -844,6 +895,12 @@ def delete_tree(
 
     tree.deleted_at = datetime.now(timezone.utc)
     tree.updated_by = current_user.id
+    if tree.digital_twin_id:
+        twin = db.get(DigitalTwin, tree.digital_twin_id)
+        if twin:
+            twin.deleted_at = tree.deleted_at
+            twin.status = "deleted"
+            twin.updated_by = current_user.id
     db.flush()
 
     record_audit(

@@ -14,7 +14,7 @@ Maps each requirement block to its target SDLC phase (per the platform brief's �
 | FR-PLT (Platform Foundation) | BRD §1 | Phase 3 | 🟢 implemented (see Phase 3 checklist below) | Yes |
 | FR-FARM (Farm & Crop Domain) | BRD §2 | Phase 4 | 🟢 implemented (see Phase 4 checklist below) | Yes |
 | FR-GIS / GIS (GIS & Spatial) | BRD §3, SRS §2 | Phase 5 | 🟢 backend implemented (see Phase 5 checklist below); map client pending frontend rewrite | Partial (basic map only) |
-| FR-TWIN / TWIN (Digital Twin & 3D) | BRD §4, SRS §1 | Phase 6 | 🟢 seed exists (IFC viewer) | Yes |
+| FR-TWIN / TWIN (Digital Twin & 3D) | BRD §4, SRS §1 | Phase 6 | 🟡 backend Digital Twin Core implemented (see Phase 6 checklist below); IFC viewer is still the only 3D piece — Next.js/Cesium frontend work explicitly deferred | Yes |
 | FR-IOT / IOT (IoT Platform) | BRD §5, SRS §3 | Phase 7 | ⚪ not started (manual condition fields only) | Yes (simulator-driven) |
 | FR-IRR / FR-FERT (Irrigation & Fertigation) | BRD §6 | Phase 8 | ⚪ not started | Yes (manual-approval mode) |
 | FR-CCTV / VIS (Vision AI) | BRD §7, SRS §5 | Phase 9 | ⚪ not started | No |
@@ -167,3 +167,27 @@ No business-feature code is written against this architecture until sign-off, pe
 - [ ] Stakeholder review/sign-off — **pending, human step**
 
 **Known follow-ups carried into the frontend-rewrite phase**: the MapLibre GL map client SRS GIS-002 calls for (layer manager UI, interactive draw/edit with snapping, raster orthophoto overlay) is not built — this phase is backend-only, same precedent as Phases 3-4, since the frontend is still the legacy vanilla-JS app pending its own migration (`docs/00-EXISTING-CODEBASE-ANALYSIS.md` §4); the backend endpoints above (`/api/v1/gis/*`, `PATCH .../boundary`) are exactly what that future client will call. KML/Shapefile import (FR-GIS-003) is deferred — both need `fiona`/GDAL, a much heavier container dependency than GeoJSON's zero-extra-deps path; add if/when a real farm survey delivers one of those formats. Layer-visibility persistence (which layers a user last had toggled on) is frontend/UI state, not modeled here.
+
+## Phase 6 (backend slice) completion checklist (Digital Twin Core)
+
+**Scope note**: `docs/11-ADR.md` ADR-012 and ADR-005/006 scope Phase 6 as full-stack (stand up the Next.js/React/TS frontend per the strangler-fig plan, integrate CesiumJS for orchard-scale 3D). The user explicitly chose a backend-only pass for now — this checklist covers only the generic Digital Twin data model and the legacy-Equipment migration path. The frontend rewrite and CesiumJS integration remain open, tracked below, not silently dropped.
+
+- [x] Generic model per ADR-004/TWIN-001: `TwinType`, `DigitalTwin`, `TwinRelationship`, `TwinProperty`, `TwinEvent`, `TwinTelemetry` — `backend/app/twins/models.py`, migration `backend/alembic/versions/0006_digital_twin_core.py`. `TwinProperty` (not a fixed-column `Asset` table) is what lets a new asset/tree category be added as configuration, not a schema change
+- [x] Twin ID immutability (BR-006): `DigitalTwin.id` assigned once, never reassigned; `display_code` is the separate mutable, user-facing label
+- [x] Temporal, directed twin relationships (`TwinRelationship.valid_from`/`valid_to`) — TWIN-003
+- [x] Append-only event timeline (`TwinEvent`) and telemetry (`TwinTelemetry`, plain table for now — TimescaleDB hypertable conversion deferred to Phase 7's real ingestion volume) — TWIN-002/004
+- [x] "Twin inspector" aggregate endpoint (`GET /api/v1/twins/{id}`: current state + properties + recent events + latest telemetry per metric in one shape) — directly satisfies TWIN-002's "one consistent API shape regardless of twin type"
+- [x] `Tree.digital_twin_id` (nullable FK) added and wired into every tree-creation path in `backend/app/routers/v1/farm.py` (`create_tree`, `bulk_create_trees`, `import_trees_csv`, `generate_tree_grid`) via a shared `_build_tree` helper — closes the Phase 4 follow-up docs/08-DATA-ARCHITECTURE.md §6 named for this phase. Tree soft-delete and growth-stage/code updates also sync the linked twin's `deleted_at`/`status`/`current_state`/`display_code`
+- [x] `backend/app/scripts/backfill_tree_twins.py` — one-off backfill for any `Tree` predating this migration
+- [x] `backend/app/scripts/migrate_equipment_to_twins.py` — migrates legacy (unauthenticated) `Equipment` rows into `DigitalTwin`+`TwinProperty` per SRS TWIN-005, deliberately excluding `tree_*`-prefixed rows (superseded by Phase 4's real `Tree` entities, not duplicated)
+- [x] RBAC: `twin.view`/`twin.manage`/`twin.telemetry.write` added to `backend/app/foundation/rbac_catalog.py`, granted to `farm_owner`/`farm_manager`/`agronomist`/`field_worker`/`viewer` (view-oriented) and `maintenance_engineer` (manage — its first real permissions, a natural fit for asset-category twins); farm-scoped ABAC reuses `assert_farm_scope` via a nullable `DigitalTwin.farm_id` (mirrors legacy `Equipment.model_id IS NULL` = unscoped)
+- [x] Legacy `models`/`equipment`/`dashboard` endpoints left untouched and still working — cutting them over to auth/RLS would break the existing vanilla-JS frontend's one working demo with no login flow to replace it; real cutover happens with the frontend rewrite below, not attempted here
+- [x] Automated tests (`backend/tests/test_twins.py`): TwinType/DigitalTwin CRUD, relationship both-directions query, property upsert (overwrite not duplicate), event append-only, telemetry + latest-per-metric, the inspector aggregate, tree-creation auto-linking a digital twin, and farm-scoped ABAC (positive + negative)
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- `TwinCommand` and `TwinDocument` (named in TWIN-001's generic-model roster but with no dedicated `TWIN-00x` requirement of their own) — `TwinCommand` belongs with Phase 7's IoT actuation, `TwinDocument` has no consumer yet
+- `TwinAlert` — alerting is Phase 7's `FR-ALERT`; a twin's "alarm state" (FR-TWIN-002) can read `TwinEvent`/`current_state` until then
+- **The Next.js/React/TS frontend shell (ADR-012) and CesiumJS orchard-scale 3D integration (ADR-005/006)** — full-stack work explicitly out of scope for this pass by user decision; this is the largest remaining piece of Phase 6 as originally scoped and should be picked up as its own dedicated effort, not folded into Phase 7
+- List-level `GET /api/v1/twins` (no `farm_id` filter) is tenant-wide-permission-gated only, same documented limitation as the Phase 4/5 list endpoints
+- `POST /{twin_id}/relationships` only ABAC-checks the `from` twin, not the `to` twin — a minor existence-oracle gap (a user could learn a `to_twin_id` exists via a 404-vs-201 response even without visibility into its farm), not a data-exposure one

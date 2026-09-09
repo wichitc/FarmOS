@@ -125,6 +125,9 @@ class Tree(TenantScopedMixin, Base):
     row_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("rows.id", ondelete="CASCADE"), index=True)
     crop_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("crops.id"), index=True)
     variety_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("varieties.id"), nullable=True)
+    digital_twin_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("digital_twins.id"), nullable=True
+    )
     code: Mapped[str] = mapped_column(String(100))
     planting_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     rootstock: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)

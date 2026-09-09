@@ -119,6 +119,7 @@ class TreeOut(BaseModel):
     row_id: str
     crop_id: str
     variety_id: Optional[str] = None
+    digital_twin_id: Optional[str] = None
     code: str
     planting_date: Optional[date] = None
     rootstock: Optional[str] = None

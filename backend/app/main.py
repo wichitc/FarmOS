@@ -18,6 +18,7 @@ from .routers.v1 import master_data as master_data_router_v1
 from .routers.v1 import notifications as notifications_router_v1
 from .routers.v1 import roles as roles_router_v1
 from .routers.v1 import tenants as tenants_router_v1
+from .routers.v1 import twins as twins_router_v1
 from .routers.v1 import users as users_router_v1
 from .routers.v1 import workflow as workflow_router_v1
 
@@ -77,6 +78,7 @@ app.include_router(config_router_v1.router)
 app.include_router(master_data_router_v1.router)
 app.include_router(farm_router_v1.router)
 app.include_router(gis_router_v1.router)
+app.include_router(twins_router_v1.router)
 app.include_router(workflow_router_v1.router)
 app.include_router(notifications_router_v1.router)
 app.include_router(audit_router_v1.router)
