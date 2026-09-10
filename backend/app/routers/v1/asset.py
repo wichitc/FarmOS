@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from ...ai.service import record_prediction
 from ...asset import models as asset_models
 from ...asset import schemas as asset_schemas
 from ...asset.health_engine import assess_asset_health
@@ -198,6 +199,19 @@ def create_health_assessment(
         entity_type="asset_health_assessment",
         entity_id=assessment.id,
         new_values={"twin_id": twin.id, "score": assessment.score, "band": assessment.band},
+    )
+    # AI-001: every rule-engine output that feeds a downstream decision gets
+    # a Prediction envelope recorded against the registry (Phase 15).
+    record_prediction(
+        db,
+        tenant_id=current_user.tenant_id,
+        model_code="health_score_rule_engine",
+        entity_type="digital_twin",
+        entity_id=twin.id,
+        input_ref={"twin_type_id": twin_type.id},
+        output={"score": result.score, "band": result.band, "recommendations": result.recommendations},
+        confidence=None,
+        created_by=current_user.id,
     )
     db.commit()
     return assessment

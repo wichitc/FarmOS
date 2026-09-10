@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ...ai.service import record_prediction
 from ...core.deps import assert_farm_scope, require_permission, set_tenant_context
 from ...database import get_db
 from ...farm import models as farm_models
@@ -149,6 +150,21 @@ def create_yield_forecast(
         entity_type="yield_forecast",
         entity_id=forecast.id,
         new_values={"farm_id": farm.id, "estimated_yield_kg_low": estimate.estimated_yield_kg_low, "estimated_yield_kg_high": estimate.estimated_yield_kg_high},
+    )
+    record_prediction(
+        db,
+        tenant_id=current_user.tenant_id,
+        model_code="yield_estimation_rule_engine",
+        entity_type="yield_forecast",
+        entity_id=forecast.id,
+        input_ref={
+            "tree_count": payload.tree_count,
+            "avg_fruit_count_per_tree": payload.avg_fruit_count_per_tree,
+            "avg_fruit_weight_kg": payload.avg_fruit_weight_kg,
+        },
+        output={"estimated_yield_kg_low": estimate.estimated_yield_kg_low, "estimated_yield_kg_high": estimate.estimated_yield_kg_high},
+        confidence=estimate.confidence,
+        created_by=current_user.id,
     )
     db.commit()
     return forecast

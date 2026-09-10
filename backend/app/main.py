@@ -9,7 +9,9 @@ from .config import settings
 from .routers import dashboard as dashboard_router
 from .routers import equipment as equipment_router
 from .routers import models as models_router
+from .routers.v1 import ai as ai_router_v1
 from .routers.v1 import asset as asset_router_v1
+from .routers.v1 import accounting as accounting_router_v1
 from .routers.v1 import audit as audit_router_v1
 from .routers.v1 import auth as auth_router_v1
 from .routers.v1 import config as config_router_v1
@@ -23,6 +25,7 @@ from .routers.v1 import irrigation as irrigation_router_v1
 from .routers.v1 import master_data as master_data_router_v1
 from .routers.v1 import notifications as notifications_router_v1
 from .routers.v1 import roles as roles_router_v1
+from .routers.v1 import sales as sales_router_v1
 from .routers.v1 import tenants as tenants_router_v1
 from .routers.v1 import twins as twins_router_v1
 from .routers.v1 import users as users_router_v1
@@ -95,9 +98,12 @@ app.include_router(crophealth_router_v1.router)
 app.include_router(harvest_router_v1.router)
 app.include_router(asset_router_v1.router)
 app.include_router(inventory_router_v1.router)
+app.include_router(accounting_router_v1.router)
+app.include_router(sales_router_v1.router)
 app.include_router(workflow_router_v1.router)
 app.include_router(notifications_router_v1.router)
 app.include_router(audit_router_v1.router)
+app.include_router(ai_router_v1.router)
 
 
 @app.get("/api/status")

@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 
+from ..ai.service import seed_baseline_catalog
 from ..core.deps import set_tenant_context
 from ..core.security import hash_password
 from . import models as fm
@@ -77,6 +78,7 @@ def provision_tenant(
     )
 
     _seed_mandatory_approval_workflows(db, tenant.id)
+    seed_baseline_catalog(db, tenant.id)
 
     db.flush()
     return tenant, admin_user
@@ -97,13 +99,17 @@ def _seed_mandatory_approval_workflows(db: Session, tenant_id: str) -> None:
     approved request), and `PurchaseRequest` (Phase 13, `app.inventory` -
     FR-PROC-001: a PurchaseOrder is only ever issued from an approved
     request) can only reach `status="approved"` by going through one of
-    these."""
+    these. `agent_action` (Phase 15, `app.ai`) extends the same floor to
+    autonomous-agent-proposed actions classified L3 by
+    `ai.agent_gateway.resolve_effective_level` - an agent can never reach
+    L3 execution without going through this same workflow."""
     for entity_type, name in (
         ("irrigation_plan", "Irrigation Plan Approval"),
         ("fertigation_plan", "Fertigation Plan Approval"),
         ("treatment_plan", "Treatment Plan Approval"),
         ("maintenance_request", "Maintenance Request Approval"),
         ("purchase_request", "Purchase Request Approval"),
+        ("agent_action", "Agent Action Approval"),
     ):
         db.add(
             fm.WorkflowDefinition(
