@@ -16,6 +16,7 @@ from .routers.v1 import audit as audit_router_v1
 from .routers.v1 import auth as auth_router_v1
 from .routers.v1 import config as config_router_v1
 from .routers.v1 import crophealth as crophealth_router_v1
+from .routers.v1 import dashboard as dashboard_router_v1
 from .routers.v1 import farm as farm_router_v1
 from .routers.v1 import gis as gis_router_v1
 from .routers.v1 import harvest as harvest_router_v1
@@ -31,6 +32,7 @@ from .routers.v1 import twins as twins_router_v1
 from .routers.v1 import users as users_router_v1
 from .routers.v1 import vision as vision_router_v1
 from .routers.v1 import weather as weather_router_v1
+from .routers.v1 import work as work_router_v1
 from .routers.v1 import workflow as workflow_router_v1
 
 # Schema is managed exclusively through Alembic migrations (backend/alembic/)
@@ -104,6 +106,8 @@ app.include_router(workflow_router_v1.router)
 app.include_router(notifications_router_v1.router)
 app.include_router(audit_router_v1.router)
 app.include_router(ai_router_v1.router)
+app.include_router(dashboard_router_v1.router)
+app.include_router(work_router_v1.router)
 
 
 @app.get("/api/status")

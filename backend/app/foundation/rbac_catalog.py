@@ -97,6 +97,11 @@ PERMISSIONS: list[tuple[str, str]] = [
     ("ai.agent.execute", "Execute an approved or supervised agent action"),
     ("ai.agent.policy.manage", "Grant/revoke L4 autonomous-execution policy grants"),
     ("ai.copilot.use", "Ask the AI Copilot questions"),
+    ("dashboard.view", "View the Command Center fleet and per-farm summary rollups"),
+    ("work.task.view", "View work tasks"),
+    ("work.task.manage", "Request/plan/assign/cancel work tasks"),
+    ("work.task.execute", "Accept/reject/start/complete work tasks assigned to you"),
+    ("work.task.review", "Review a completed work task and close it or send it back"),
 ]
 
 SYSTEM_ROLES: list[tuple[str, str]] = [
@@ -193,6 +198,11 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "ai.agent.approve",
         "ai.agent.execute",
         "ai.copilot.use",
+        "dashboard.view",
+        "work.task.view",
+        "work.task.manage",
+        "work.task.execute",
+        "work.task.review",
     ],
     "farm_manager": [
         "master_data.crop.view",
@@ -275,6 +285,11 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "ai.agent.approve",
         "ai.agent.execute",
         "ai.copilot.use",
+        "dashboard.view",
+        "work.task.view",
+        "work.task.manage",
+        "work.task.execute",
+        "work.task.review",
     ],
     "agronomist": [
         "master_data.crop.view",
@@ -318,6 +333,10 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "ai.prediction.manage",
         "ai.agent.propose",
         "ai.copilot.use",
+        "dashboard.view",
+        "work.task.view",
+        "work.task.manage",
+        "work.task.execute",
     ],
     "field_worker": [
         "farm.view",
@@ -357,6 +376,9 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "ai.prediction.view",
         "ai.agent.propose",
         "ai.copilot.use",
+        "dashboard.view",
+        "work.task.view",
+        "work.task.execute",
     ],
     "maintenance_engineer": [
         "twin.view",
@@ -383,6 +405,9 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "ai.prediction.manage",
         "ai.agent.propose",
         "ai.copilot.use",
+        "dashboard.view",
+        "work.task.view",
+        "work.task.execute",
     ],
     "warehouse_officer": [
         "inventory.item.view",
@@ -404,6 +429,8 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "ai.prediction.view",
         "ai.agent.propose",
         "ai.copilot.use",
+        "dashboard.view",
+        "work.task.view",
     ],
     "finance": [
         "workflow.instance.approve",
@@ -426,8 +453,10 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "ai.model.view",
         "ai.prediction.view",
         "ai.copilot.use",
+        "dashboard.view",
+        "work.task.view",
     ],
-    "auditor": ["platform.audit.view", "notification.view", "ai.model.view", "ai.prediction.view"],
+    "auditor": ["platform.audit.view", "notification.view", "ai.model.view", "ai.prediction.view", "dashboard.view", "work.task.view"],
     "viewer": [
         "master_data.crop.view",
         "farm.view",
@@ -467,5 +496,7 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "ai.model.view",
         "ai.prediction.view",
         "ai.copilot.use",
+        "dashboard.view",
+        "work.task.view",
     ],
 }
