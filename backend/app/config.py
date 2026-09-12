@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     iot_offline_check_interval_seconds: int = 60
     iot_offline_timeout_seconds: int = 300
 
+    # Hardening (Phase 18, SEC-007). Redis-backed so limits are shared
+    # across workers/restarts, not just per-process memory. Disabled via
+    # `RATE_LIMIT_ENABLED=false` for test/CI runs, where every request
+    # shares one fake client identity (Starlette's TestClient) and would
+    # otherwise trip the limiter almost immediately - see
+    # `core/rate_limit.py`'s module docstring.
+    rate_limit_enabled: bool = True
+    redis_url: str = "redis://localhost:6380/0"
+    rate_limit_default_per_minute: int = 300
+    rate_limit_login_per_minute: int = 10
+    rate_limit_public_per_minute: int = 30
+
     model_config = SettingsConfigDict(env_file=str(BACKEND_DIR / ".env"), env_file_encoding="utf-8")
 
     @property

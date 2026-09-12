@@ -13,6 +13,7 @@ email-validator>=2.1
 geoalchemy2>=0.15
 shapely>=2.0
 paho-mqtt>=2.1
+redis>=5.0
 
 pytest>=8.0
 pytest-asyncio>=0.24

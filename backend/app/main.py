@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import settings
+from .core.rate_limit import check_rate_limit
 from .routers import dashboard as dashboard_router
 from .routers import equipment as equipment_router
 from .routers import models as models_router
@@ -57,6 +58,45 @@ async def correlation_id_middleware(request: Request, call_next):
     request.state.correlation_id = correlation_id
     response = await call_next(request)
     response.headers["X-Correlation-Id"] = correlation_id
+    return response
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """SEC-007: see `core/rate_limit.py`. Builds its own correlation id
+    (same fallback logic as `correlation_id_middleware`) rather than
+    relying on `request.state.correlation_id` having already been set -
+    keeps this middleware correct regardless of the two middlewares'
+    relative stack order."""
+    allowed, rule, retry_after = await check_rate_limit(request)
+    if not allowed:
+        correlation_id = request.headers.get("x-correlation-id") or str(uuid.uuid4())
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "code": 429,
+                    "message": f"Rate limit exceeded: {rule.limit} requests per {rule.window_seconds}s",
+                    "correlation_id": correlation_id,
+                }
+            },
+            headers={"Retry-After": str(retry_after), "X-Correlation-Id": correlation_id},
+        )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """OWASP-baseline response headers (SEC-007). TLS termination itself
+    (SEC-004) is a deployment-layer concern outside this app's code -
+    `Strict-Transport-Security` is set unconditionally since it is a no-op
+    when a deployment happens to still be plain HTTP, but takes effect the
+    moment a reverse proxy in front of it terminates TLS."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     return response
 
 
