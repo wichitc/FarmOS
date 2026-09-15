@@ -33,6 +33,7 @@ from .routers.v1 import notifications as notifications_router_v1
 from .routers.v1 import reporting as reporting_router_v1
 from .routers.v1 import roles as roles_router_v1
 from .routers.v1 import sales as sales_router_v1
+from .routers.v1 import subscription as subscription_router_v1
 from .routers.v1 import tenants as tenants_router_v1
 from .routers.v1 import twins as twins_router_v1
 from .routers.v1 import users as users_router_v1
@@ -174,6 +175,7 @@ app.include_router(dashboard_router_v1.router)
 app.include_router(work_router_v1.router)
 app.include_router(reporting_router_v1.router)
 app.include_router(crm_router_v1.router)
+app.include_router(subscription_router_v1.router)
 
 
 @app.get("/api/status")

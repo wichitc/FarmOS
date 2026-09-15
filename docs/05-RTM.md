@@ -521,3 +521,22 @@ Next increment of the vendor CRM (master prompt §11), following Phase 19's Lead
 - **No attachment support** — §11 lists attachments as a ticket capability; no file-upload endpoint exists anywhere in this platform yet (SEC-005 is itself still deferred, see Phase 18's checklist), so there's nothing to attach to yet
 - **No SLA breach alerting** — `sla_due_at` is computed and stored, but nothing watches for it passing; wiring that to the existing `Alert`/notification system (Phase 7) is additive, not built this pass
 - **Marketing/Campaign** (§9) — still the one remaining piece of the master prompt's CRM section (§9-11) not yet picked up
+
+## Master-prompt integration, Phase 21: Subscription & Plans
+
+Next increment (master prompt §37), following the vendor CRM (Phase 19) and Support Tickets (Phase 20).
+
+- [x] **`Plan`/`Subscription`** (`backend/app/subscription/`, migration `0020_subscription_plans.py`). `Plan` is a global catalog (Free/Farm/Pro/Enterprise, seeded idempotently like `Permission`); `Subscription` is one row per tenant, deliberately not RLS-protected - the vendor's own billing record *about* a tenant, same treatment as `crm.models.Customer`
+- [x] **No payment processing anywhere** — `price_per_month` is pricing-page content only; this assistant does not build or execute real financial transactions regardless of what a product brief asks for. What *is* built: the entitlement data model (plan, limits, trial state) a real billing integration would sit behind later
+- [x] **Every tenant gets a real `Subscription` automatically at provisioning**: `foundation.seed.provision_tenant` -> `seed_default_subscription` — "free" plan, `status="trialing"`, 14-day trial — the same structural, not-optional seeding already used for RBAC roles and mandatory approval workflows, so there is never a tenant without one to report usage against
+- [x] **`GET /api/v1/subscriptions/me` reports real usage against real limits** (farm/user/sensor counts, live-queried, not cached or estimated) — verified live against a freshly bootstrapped tenant. **Bug found and fixed during testing**: `GET /plans` initially returned an empty list when hit before any tenant had ever been provisioned (the catalog was only ever seeded as a side effect of tenant provisioning) — a pricing page must work before a single tenant exists. Fixed by having the endpoint ensure its own catalog on read, same idempotent pattern as everywhere else, just no longer gated behind an unrelated prerequisite
+- [x] Platform-staff-only plan changes and cancellation (`POST .../change-plan`, `POST .../cancel`), audited; a regular tenant user can see their own tenant's subscription+usage but not change it, and cannot view another tenant's at all
+- [x] Automated tests (`backend/tests/test_subscription.py`): public plan listing (including before any tenant exists), default trial subscription on a fresh tenant, real usage counts after creating a farm, cross-tenant view denied for a non-admin, platform-staff cross-tenant view + plan change (including an unknown-plan 422), and cancel (idempotency-guarded, blocks a further plan change)
+- [x] Verified live: public plans listing, and a freshly bootstrapped tenant's real trial subscription + usage-vs-limits, both via curl
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **No enforcement** — `farm.py`/`users.py`/`iot.py`'s create endpoints do not check `farm_limit`/`user_limit`/`sensor_limit` before allowing another row; `GET /subscriptions/me` reports real usage vs. real limits, but nothing currently blocks on it. Wiring a hard gate into every prior phase's create endpoint is the same reaching-back-into-everything tradeoff Phase 14 and 17 already declined for ledger postings and automatic work-task creation, respectively
+- **No self-service upgrade/downgrade** — plan changes are platform-staff-only (`require_platform_super_admin`); there is no tenant-initiated "upgrade my plan" flow, which would need real payment collection anyway (out of scope, see above)
+- **No proration, invoicing, or billing history** — `current_period_start`/`current_period_end` exist on `Subscription` but nothing populates or bills against them yet
+- **Trial expiry has no automatic consequence** — `trial_ends_at` passing does not itself change `status` from `trialing` to anything else; there is no scheduled job watching for it (same class of gap as the SLA-breach-alerting deferral in Phase 20)

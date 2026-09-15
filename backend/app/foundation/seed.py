@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from ..ai.service import seed_baseline_catalog
 from ..core.deps import set_tenant_context
 from ..core.security import hash_password
+from ..subscription.service import seed_default_subscription
 from . import models as fm
 from .rbac_catalog import DEFAULT_ROLE_PERMISSIONS, PERMISSIONS, SYSTEM_ROLES
 
@@ -79,6 +80,7 @@ def provision_tenant(
 
     _seed_mandatory_approval_workflows(db, tenant.id)
     seed_baseline_catalog(db, tenant.id)
+    seed_default_subscription(db, tenant.id)
 
     db.flush()
     return tenant, admin_user
