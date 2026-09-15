@@ -39,6 +39,7 @@ from ..foundation import models as fm
 from ..foundation import workflow_engine
 from ..foundation.audit import record_audit
 from . import models as ai_models
+from .service import get_agent_definition
 
 
 def _active_grant(db: Session, tenant_id: str, action_type: str) -> Optional[ai_models.AgentPolicyGrant]:
@@ -111,6 +112,19 @@ def propose_action(
     db.add(action)
     db.flush()
 
+    # Cross-check against the agent taxonomy (Phase 24 follow-on) for
+    # traceability, but deliberately not a hard gate: an unrecognized
+    # agent_code still succeeds (ad hoc/manual/test-tooling callers
+    # aren't required to be one of the eleven cataloged agents) - the
+    # real safety boundary is `resolve_effective_level` above, unaffected
+    # by whether the agent is registered.
+    definition = get_agent_definition(db, tenant_id, agent_code)
+    audit_values = {"agent_code": agent_code, "action_type": action_type, "level": level}
+    if definition is not None:
+        audit_values["agent_domain"] = definition.domain
+        if definition.allowed_action_types and action_type not in definition.allowed_action_types:
+            audit_values["unexpected_action_type_for_agent"] = True
+
     record_audit(
         db,
         tenant_id=tenant_id,
@@ -118,7 +132,7 @@ def propose_action(
         action="agent_action.propose",
         entity_type="agent_action",
         entity_id=action.id,
-        new_values={"agent_code": agent_code, "action_type": action_type, "level": level},
+        new_values=audit_values,
         correlation_id=correlation_id,
     )
     return action

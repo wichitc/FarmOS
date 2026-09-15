@@ -224,3 +224,38 @@ def test_irrigation_plan_farm_scoped_abac(client, tenant):
 
     denied_res = client.get(f"/api/v1/irrigation/plans/{plan_b['id']}", headers=manager_headers)
     assert denied_res.status_code == 403
+
+
+def test_ai_recommended_plan_records_an_agent_action(client, tenant):
+    """Phase 24 follow-on (master prompt §28): an ai_recommended plan gets
+    a real, immediately-closed L1 AgentAction from the Irrigation Agent -
+    the recommendation itself is advisory and always allowed; the actual
+    risky action (opening a valve) stays gated behind this same plan's
+    own approve/execute flow, unchanged."""
+    headers = tenant.auth_headers(client)
+    farm, plot = _create_farm_with_plot(client, headers, farm_code="IRRFARM_AI")
+
+    plan = client.post(
+        f"/api/v1/irrigation/farms/{farm['id']}/plans",
+        json={"plot_id": plot["id"], "source": "ai_recommended", "recommended_volume_liters": 400, "reason": "Soil moisture below target"},
+        headers=headers,
+    ).json()
+
+    actions_res = client.get("/api/v1/ai/agents/irrigation/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    matching = [a for a in actions_res.json() if a["entity_id"] == plan["id"]]
+    assert len(matching) == 1
+    action = matching[0]
+    assert action["level"] == "L1"
+    assert action["status"] == "executed"
+    assert action["action_type"] == "irrigation_recommendation"
+    assert action["result"]["irrigation_plan_id"] == plan["id"]
+
+    # A manually-created plan (not ai_recommended) gets no agent action.
+    manual_plan = client.post(
+        f"/api/v1/irrigation/farms/{farm['id']}/plans",
+        json={"plot_id": plot["id"], "source": "manual", "reason": "manual override"},
+        headers=headers,
+    ).json()
+    actions_after_res = client.get("/api/v1/ai/agents/irrigation/actions", headers=headers)
+    assert manual_plan["id"] not in [a["entity_id"] for a in actions_after_res.json()]

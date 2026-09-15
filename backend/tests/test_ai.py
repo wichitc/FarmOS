@@ -235,3 +235,40 @@ def test_copilot_answers_with_citations_grounded_in_real_data(client, tenant):
     )
     assert follow_up.status_code == 200, follow_up.text
     assert follow_up.json()["conversation_id"] == conv_id
+
+
+def test_agent_registry_seeded_on_provisioning(client, tenant):
+    headers = tenant.auth_headers(client)
+    res = client.get("/api/v1/ai/agents", headers=headers)
+    assert res.status_code == 200, res.text
+    agent_codes = {a["agent_code"] for a in res.json()}
+    assert agent_codes == {
+        "farm_manager", "crop", "weather", "soil", "irrigation", "fertilizer",
+        "disease", "pest", "yield", "finance", "sustainability",
+    }
+    irrigation_agent = next(a for a in res.json() if a["agent_code"] == "irrigation")
+    assert irrigation_agent["domain"] == "irrigation"
+    assert "irrigation_recommendation" in irrigation_agent["allowed_action_types"]
+
+
+def test_agent_registry_filter_by_domain(client, tenant):
+    headers = tenant.auth_headers(client)
+    res = client.get("/api/v1/ai/agents", params={"domain": "finance"}, headers=headers)
+    assert res.status_code == 200
+    assert [a["agent_code"] for a in res.json()] == ["finance"]
+
+
+def test_unregistered_agent_code_is_not_rejected(client, tenant):
+    """The registry cross-checks for traceability but is not a hard gate -
+    an agent_code outside the catalog still succeeds (real safety stays
+    at the action_type/level layer)."""
+    action = _propose(client, tenant.auth_headers(client), agent_code="some_future_agent_not_yet_cataloged")
+    assert action["status"] == "proposed"
+
+
+def test_agent_actions_listed_by_registered_agent(client, tenant):
+    headers = tenant.auth_headers(client)
+    action = _propose(client, headers, agent_code="crop", action_type="crop_health_assessment")
+    res = client.get("/api/v1/ai/agents/crop/actions", headers=headers)
+    assert res.status_code == 200, res.text
+    assert action["id"] in [a["id"] for a in res.json()]

@@ -33,7 +33,7 @@ promised.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -176,6 +176,30 @@ class AgentAction(TenantScopedMixin, Base):
     policy_grant_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("agent_policy_grants.id"), nullable=True)
     result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentDefinition(TenantScopedMixin, Base):
+    """The named-agent taxonomy (master-prompt integration §28, Phase 24
+    follow-on) - Farm Manager, Crop, Weather, Soil, Irrigation, Fertilizer,
+    Disease, Pest, Yield, Finance, Sustainability. Seeded per tenant like
+    the AI Model Registry (`ai/service.py::seed_baseline_catalog`), not a
+    new execution mechanism: an `AgentDefinition` documents which domain
+    an `agent_code` belongs to and which `action_type`s it's expected to
+    propose - `agent_gateway.propose_action` looks a proposing agent_code
+    up here to record its domain, but deliberately does NOT hard-reject
+    an unrecognized one (ad hoc/manual/test-tooling callers still work;
+    the real safety boundary stays at the action_type/level layer in
+    `ACTION_LEVEL_FLOORS`, unchanged by this registry)."""
+
+    __tablename__ = "agent_definitions"
+    __table_args__ = (UniqueConstraint("tenant_id", "agent_code", name="uq_agent_definitions_tenant_code"),)
+
+    id: Mapped[str] = _uuid_pk()
+    agent_code: Mapped[str] = mapped_column(String(100), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    domain: Mapped[str] = mapped_column(String(50))
+    description: Mapped[str] = mapped_column(Text)
+    allowed_action_types: Mapped[list] = mapped_column(JSONB, default=list)
 
 
 class CopilotConversation(TenantScopedMixin, Base):

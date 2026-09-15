@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...ai import agent_gateway
 from ...core.deps import assert_farm_scope, require_permission
 from ...database import get_db
 from ...farm import models as farm_models
@@ -65,6 +66,7 @@ def _active_definition(db: Session, tenant_id: str, entity_type: str) -> fm.Work
 def create_irrigation_plan(
     farm_id: str,
     payload: irr_schemas.IrrigationPlanCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("irrigation.plan.manage")),
 ):
@@ -100,6 +102,35 @@ def create_irrigation_plan(
         entity_id=plan.id,
         new_values={"farm_id": farm.id, "plot_id": payload.plot_id},
     )
+
+    if payload.source == "ai_recommended":
+        # The Irrigation Agent's Observe->Analyze->Recommend record (Phase
+        # 24 follow-on to the master-prompt agent taxonomy, §28). L1
+        # ("advisory") because recommending a plan is not itself the risky
+        # action - actually opening a valve stays gated behind this same
+        # IrrigationPlan's own approve/execute flow below (Phase 8, the
+        # hardcoded L3-equivalent floor per docs/09-SECURITY-ARCHITECTURE.md
+        # §6), unchanged. Proposing and closing it out immediately at L1
+        # both always succeed with no gating, so this never blocks plan
+        # creation on the agent-gateway call.
+        agent_action = agent_gateway.propose_action(
+            db, tenant_id=current_user.tenant_id, actor=current_user,
+            agent_code="irrigation", action_type="irrigation_recommendation", requested_level="L1",
+            entity_type="irrigation_plan", entity_id=plan.id, farm_id=farm.id,
+            rationale=plan.reason or "AI-recommended irrigation plan.",
+            input_context={
+                "plot_id": payload.plot_id,
+                "recommended_volume_liters": payload.recommended_volume_liters,
+                "recommended_duration_minutes": payload.recommended_duration_minutes,
+            },
+            correlation_id=_correlation_id(request),
+        )
+        agent_gateway.execute_action(
+            db, action=agent_action, actor=current_user,
+            result={"irrigation_plan_id": plan.id, "recommended_volume_liters": payload.recommended_volume_liters},
+            correlation_id=_correlation_id(request),
+        )
+
     db.commit()
     return plan
 

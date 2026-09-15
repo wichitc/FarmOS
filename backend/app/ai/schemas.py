@@ -27,6 +27,17 @@ class ModelVersionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AgentDefinitionOut(BaseModel):
+    id: str
+    agent_code: str
+    name: str
+    domain: str
+    description: str
+    allowed_action_types: list[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PredictionOut(BaseModel):
     id: str
     model_version_id: str

@@ -42,6 +42,37 @@ def list_models(db: Session = Depends(get_db), user: fm.User = Depends(require_p
     return db.query(ai_models.AIModel).order_by(ai_models.AIModel.code.asc()).all()
 
 
+@router.get("/agents", response_model=list[ai_schemas.AgentDefinitionOut])
+def list_agent_definitions(
+    domain: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    user: fm.User = Depends(require_permission("ai.model.view")),
+):
+    """The named-agent taxonomy (master prompt §28, Phase 24 follow-on) -
+    reuses `ai.model.view` rather than a new permission, since this is
+    the same kind of read-only platform-capability catalog `GET /models`
+    already exposes under it."""
+    query = db.query(ai_models.AgentDefinition)
+    if domain:
+        query = query.filter(ai_models.AgentDefinition.domain == domain)
+    return query.order_by(ai_models.AgentDefinition.agent_code.asc()).all()
+
+
+@router.get("/agents/{agent_code}/actions", response_model=list[ai_schemas.AgentActionOut])
+def list_agent_definition_actions(
+    agent_code: str,
+    db: Session = Depends(get_db),
+    user: fm.User = Depends(require_permission("ai.agent.propose")),
+):
+    return (
+        db.query(ai_models.AgentAction)
+        .filter(ai_models.AgentAction.agent_code == agent_code)
+        .order_by(ai_models.AgentAction.created_at.desc())
+        .limit(50)
+        .all()
+    )
+
+
 @router.get("/models/{model_id}/versions", response_model=list[ai_schemas.ModelVersionOut])
 def list_model_versions(
     model_id: str,
