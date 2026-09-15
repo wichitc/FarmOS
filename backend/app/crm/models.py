@@ -32,13 +32,28 @@ if you're platform staff" in code instead - a documented, deliberate
 exception to this platform's usual RLS-first tenant-isolation pattern,
 justified by who actually needs cross-tenant visibility here.
 
-Marketing/Campaign and Knowledge-Base (master prompt §9, §11) remain
-explicitly not built - see docs/05-RTM.md's completion checklist.
+`Campaign`/`Coupon` (master prompt §9, picked up in the Phase 22
+follow-on) complete this module's three-way split from the original
+prompt: Lead/Customer/Opportunity (Phase 19) is the pipeline,
+SupportTicket/TicketMessage (Phase 20) is post-sale support, and these
+two are pre-sale marketing/promotion data. `Lead.campaign_id` is the
+attribution link ("which campaign brought this lead in"), populated
+optionally at capture time - `routers/v1/crm.py::capture_lead` accepts an
+optional `campaign_code` and resolves it, silently ignoring an unknown
+code rather than rejecting an otherwise-valid lead over a tracking
+parameter. `Coupon` is pure discount *data* (validity window, redemption
+count, applicable plan) - redeeming one validates and increments a
+counter, but changes no price anywhere, since no billing engine exists
+in this platform to apply a discount to (see Phase 21's explicit
+no-payment-processing stance).
+
+Knowledge-Base (master prompt §11) remains explicitly not built - see
+docs/05-RTM.md's completion checklist.
 """
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -55,6 +70,9 @@ TICKET_CATEGORIES = ("billing", "technical", "feature_request", "bug", "other")
 # now" treatment as health.py's threshold table): hours-to-first-response
 # by priority.
 TICKET_SLA_HOURS = {"urgent": 4, "high": 24, "medium": 72, "low": 168}
+CAMPAIGN_CHANNELS = ("email", "social", "search", "referral", "event", "other")
+CAMPAIGN_STATUSES = ("draft", "active", "paused", "completed")
+COUPON_DISCOUNT_TYPES = ("percent", "fixed")
 
 
 def _uuid_pk() -> Mapped[str]:
@@ -87,6 +105,7 @@ class Lead(PlatformEntityMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="new")
     score: Mapped[Optional[int]] = mapped_column(nullable=True)
     assigned_to: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+    campaign_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("crm_campaigns.id"), nullable=True)
 
 
 class Customer(PlatformEntityMixin, Base):
@@ -147,3 +166,38 @@ class TicketMessage(Base):
     body: Mapped[str] = mapped_column(Text)
     is_internal_note: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Campaign(PlatformEntityMixin, Base):
+    __tablename__ = "crm_campaigns"
+
+    id: Mapped[str] = _uuid_pk()
+    code: Mapped[str] = mapped_column(String(50), unique=True)
+    name: Mapped[str] = mapped_column(String(255))
+    channel: Mapped[str] = mapped_column(String(20), default="other")
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    budget: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    utm_source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    utm_medium: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class Coupon(PlatformEntityMixin, Base):
+    """Pure discount data - see this module's docstring for why redeeming
+    one changes no price anywhere."""
+
+    __tablename__ = "crm_coupons"
+
+    id: Mapped[str] = _uuid_pk()
+    code: Mapped[str] = mapped_column(String(50), unique=True)
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    discount_type: Mapped[str] = mapped_column(String(10), default="percent")
+    discount_value: Mapped[float] = mapped_column(Float)
+    applies_to_plan_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    valid_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    valid_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    max_redemptions: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    redemption_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)

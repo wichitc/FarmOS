@@ -33,6 +33,11 @@ def _get_or_404(db: Session, model, obj_id: str, label: str):
 
 @router.post("/leads", response_model=crm_schemas.LeadOut, status_code=201)
 def capture_lead(payload: crm_schemas.LeadCapture, db: Session = Depends(get_db)):
+    campaign_id = None
+    if payload.campaign_code:
+        campaign = db.query(crm_models.Campaign).filter(crm_models.Campaign.code == payload.campaign_code).first()
+        campaign_id = campaign.id if campaign else None
+
     lead = crm_models.Lead(
         name=payload.name,
         company=payload.company,
@@ -44,6 +49,7 @@ def capture_lead(payload: crm_schemas.LeadCapture, db: Session = Depends(get_db)
         message=payload.message,
         source="landing_page",
         status="new",
+        campaign_id=campaign_id,
     )
     db.add(lead)
     db.commit()
@@ -460,3 +466,175 @@ def list_ticket_messages(
         # can see the rest of the thread.
         query = query.filter(crm_models.TicketMessage.is_internal_note.is_(False))
     return query.order_by(crm_models.TicketMessage.created_at.asc()).all()
+
+
+# ---------------------------------------------------------------------------
+# Campaigns (master prompt §9, Phase 22 follow-on)
+# ---------------------------------------------------------------------------
+
+@router.post("/campaigns", response_model=crm_schemas.CampaignOut, status_code=201)
+def create_campaign(
+    payload: crm_schemas.CampaignCreate,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_platform_super_admin),
+):
+    if payload.channel not in crm_models.CAMPAIGN_CHANNELS:
+        raise HTTPException(status_code=422, detail=f"Unknown channel '{payload.channel}'")
+
+    campaign = crm_models.Campaign(
+        code=payload.code, name=payload.name, channel=payload.channel, status="draft",
+        start_date=payload.start_date, end_date=payload.end_date, budget=payload.budget,
+        utm_source=payload.utm_source, utm_medium=payload.utm_medium, notes=payload.notes,
+        created_by=current_user.id, updated_by=current_user.id,
+    )
+    db.add(campaign)
+    db.flush()
+
+    record_audit(
+        db, tenant_id=current_user.tenant_id, actor_user_id=current_user.id,
+        action="crm_campaign.create", entity_type="crm_campaign", entity_id=campaign.id,
+        new_values={"code": campaign.code, "channel": campaign.channel},
+    )
+    db.commit()
+    return campaign
+
+
+@router.get("/campaigns", response_model=list[crm_schemas.CampaignOut])
+def list_campaigns(
+    status: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    _admin: fm.User = Depends(require_platform_super_admin),
+):
+    query = db.query(crm_models.Campaign)
+    if status:
+        query = query.filter(crm_models.Campaign.status == status)
+    return query.order_by(crm_models.Campaign.created_at.desc()).all()
+
+
+@router.get("/campaigns/{campaign_id}", response_model=crm_schemas.CampaignOut)
+def get_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    _admin: fm.User = Depends(require_platform_super_admin),
+):
+    return _get_or_404(db, crm_models.Campaign, campaign_id, "Campaign")
+
+
+@router.get("/campaigns/{campaign_id}/leads", response_model=list[crm_schemas.LeadOut])
+def list_campaign_leads(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    _admin: fm.User = Depends(require_platform_super_admin),
+):
+    _get_or_404(db, crm_models.Campaign, campaign_id, "Campaign")
+    return (
+        db.query(crm_models.Lead)
+        .filter(crm_models.Lead.campaign_id == campaign_id)
+        .order_by(crm_models.Lead.created_at.desc())
+        .all()
+    )
+
+
+@router.patch("/campaigns/{campaign_id}", response_model=crm_schemas.CampaignOut)
+def update_campaign(
+    campaign_id: str,
+    payload: crm_schemas.CampaignUpdate,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_platform_super_admin),
+):
+    campaign = _get_or_404(db, crm_models.Campaign, campaign_id, "Campaign")
+    if payload.status is not None and payload.status not in crm_models.CAMPAIGN_STATUSES:
+        raise HTTPException(status_code=422, detail=f"Unknown status '{payload.status}'")
+
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        setattr(campaign, field, value)
+    campaign.updated_by = current_user.id
+    db.flush()
+
+    record_audit(
+        db, tenant_id=current_user.tenant_id, actor_user_id=current_user.id,
+        action="crm_campaign.update", entity_type="crm_campaign", entity_id=campaign.id,
+        new_values=changes,
+    )
+    db.commit()
+    return campaign
+
+
+# ---------------------------------------------------------------------------
+# Coupons (master prompt §9, Phase 22 follow-on) - pure discount data; see
+# `crm/models.py`'s module docstring for why redemption changes no price.
+# ---------------------------------------------------------------------------
+
+@router.post("/coupons", response_model=crm_schemas.CouponOut, status_code=201)
+def create_coupon(
+    payload: crm_schemas.CouponCreate,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_platform_super_admin),
+):
+    if payload.discount_type not in crm_models.COUPON_DISCOUNT_TYPES:
+        raise HTTPException(status_code=422, detail=f"Unknown discount_type '{payload.discount_type}'")
+
+    coupon = crm_models.Coupon(
+        code=payload.code, description=payload.description, discount_type=payload.discount_type,
+        discount_value=payload.discount_value, applies_to_plan_code=payload.applies_to_plan_code,
+        valid_from=payload.valid_from, valid_to=payload.valid_to, max_redemptions=payload.max_redemptions,
+        created_by=current_user.id, updated_by=current_user.id,
+    )
+    db.add(coupon)
+    db.flush()
+
+    record_audit(
+        db, tenant_id=current_user.tenant_id, actor_user_id=current_user.id,
+        action="crm_coupon.create", entity_type="crm_coupon", entity_id=coupon.id,
+        new_values={"code": coupon.code, "discount_type": coupon.discount_type, "discount_value": coupon.discount_value},
+    )
+    db.commit()
+    return coupon
+
+
+@router.get("/coupons", response_model=list[crm_schemas.CouponOut])
+def list_coupons(
+    db: Session = Depends(get_db),
+    _admin: fm.User = Depends(require_platform_super_admin),
+):
+    return db.query(crm_models.Coupon).order_by(crm_models.Coupon.created_at.desc()).all()
+
+
+@router.post("/coupons/{code}/redeem", response_model=crm_schemas.CouponRedeemResponse)
+def redeem_coupon(
+    code: str,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(get_current_user),
+):
+    """Validates and records a redemption; applies no discount to any
+    price (there is no billing engine in this platform to apply one to -
+    see Phase 21's explicit no-payment-processing stance). Any
+    authenticated tenant user may redeem - entering a coupon code is
+    ordinarily something the customer themselves does."""
+    coupon = db.query(crm_models.Coupon).filter(crm_models.Coupon.code == code).first()
+    if coupon is None:
+        raise HTTPException(status_code=404, detail="Coupon not found")
+    if not coupon.is_active:
+        raise HTTPException(status_code=409, detail="Coupon is not active")
+
+    today = datetime.now(timezone.utc).date()
+    if coupon.valid_from and today < coupon.valid_from:
+        raise HTTPException(status_code=409, detail="Coupon is not valid yet")
+    if coupon.valid_to and today > coupon.valid_to:
+        raise HTTPException(status_code=409, detail="Coupon has expired")
+    if coupon.max_redemptions is not None and coupon.redemption_count >= coupon.max_redemptions:
+        raise HTTPException(status_code=409, detail="Coupon has reached its redemption limit")
+
+    coupon.redemption_count += 1
+    coupon.updated_by = current_user.id
+
+    record_audit(
+        db, tenant_id=current_user.tenant_id, actor_user_id=current_user.id,
+        action="crm_coupon.redeem", entity_type="crm_coupon", entity_id=coupon.id,
+        new_values={"redemption_count": coupon.redemption_count},
+    )
+    db.commit()
+    return crm_schemas.CouponRedeemResponse(
+        coupon=coupon, discount_type=coupon.discount_type, discount_value=coupon.discount_value
+    )

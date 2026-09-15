@@ -283,3 +283,99 @@ def test_customer_reply_reopens_waiting_on_customer_ticket(client, tenant, raw_d
 
     get_res = client.get(f"/api/v1/crm/tickets/{ticket['id']}", headers=admin_headers)
     assert get_res.json()["status"] == "in_progress"
+
+
+def _create_campaign(client, headers, code, channel="email"):
+    res = client.post(
+        "/api/v1/crm/campaigns",
+        json={"code": code, "name": "Durian Season Promo", "channel": channel, "budget": 50000},
+        headers=headers,
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_campaign_creation_and_validation(client, tenant, raw_db):
+    _make_super_admin(raw_db, tenant)
+    headers = tenant.auth_headers(client)
+    campaign = _create_campaign(client, headers, code=f"promo-{unique_slug('c')}")
+    assert campaign["status"] == "draft"
+    assert campaign["channel"] == "email"
+
+    bad_channel_res = client.post(
+        "/api/v1/crm/campaigns", json={"code": "bad", "name": "x", "channel": "not-a-channel"}, headers=headers
+    )
+    assert bad_channel_res.status_code == 422
+
+    activate_res = client.patch(f"/api/v1/crm/campaigns/{campaign['id']}", json={"status": "active"}, headers=headers)
+    assert activate_res.status_code == 200, activate_res.text
+    assert activate_res.json()["status"] == "active"
+
+    bad_status_res = client.patch(f"/api/v1/crm/campaigns/{campaign['id']}", json={"status": "not-a-status"}, headers=headers)
+    assert bad_status_res.status_code == 422
+
+
+def test_lead_capture_attributes_to_campaign(client, tenant, raw_db):
+    _make_super_admin(raw_db, tenant)
+    headers = tenant.auth_headers(client)
+    campaign_code = f"attrib-{unique_slug('c')}"
+    campaign = _create_campaign(client, headers, code=campaign_code)
+
+    lead_res = client.post(
+        "/api/v1/crm/leads",
+        json={"name": "Attributed Farmer", "email": f"attrib-{unique_slug('l')}@example.com", "campaign_code": campaign_code},
+    )
+    assert lead_res.status_code == 201, lead_res.text
+    assert lead_res.json()["campaign_id"] == campaign["id"]
+
+    unknown_campaign_res = client.post(
+        "/api/v1/crm/leads",
+        json={"name": "Unattributed Farmer", "email": f"noattrib-{unique_slug('l')}@example.com", "campaign_code": "does-not-exist"},
+    )
+    assert unknown_campaign_res.status_code == 201, unknown_campaign_res.text
+    assert unknown_campaign_res.json()["campaign_id"] is None
+
+    leads_res = client.get(f"/api/v1/crm/campaigns/{campaign['id']}/leads", headers=headers)
+    assert leads_res.status_code == 200
+    assert lead_res.json()["id"] in [l["id"] for l in leads_res.json()]
+
+
+def _create_coupon(client, headers, code, **overrides):
+    payload = {"code": code, "discount_type": "percent", "discount_value": 20}
+    payload.update(overrides)
+    res = client.post("/api/v1/crm/coupons", json=payload, headers=headers)
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_coupon_redemption_lifecycle(client, tenant, raw_db):
+    _make_super_admin(raw_db, tenant)
+    admin_headers = tenant.auth_headers(client)
+    coupon_code = f"SAVE20-{unique_slug('c')}"
+    coupon = _create_coupon(client, admin_headers, coupon_code, max_redemptions=1)
+
+    bad_type_res = client.post(
+        "/api/v1/crm/coupons", json={"code": "bad", "discount_type": "not-a-type", "discount_value": 5}, headers=admin_headers
+    )
+    assert bad_type_res.status_code == 422
+
+    redeem_res = client.post(f"/api/v1/crm/coupons/{coupon_code}/redeem", headers=admin_headers)
+    assert redeem_res.status_code == 200, redeem_res.text
+    assert redeem_res.json()["discount_value"] == 20
+    assert redeem_res.json()["coupon"]["redemption_count"] == 1
+
+    over_limit_res = client.post(f"/api/v1/crm/coupons/{coupon_code}/redeem", headers=admin_headers)
+    assert over_limit_res.status_code == 409
+
+    unknown_res = client.post("/api/v1/crm/coupons/DOES-NOT-EXIST/redeem", headers=admin_headers)
+    assert unknown_res.status_code == 404
+
+
+def test_expired_coupon_cannot_be_redeemed(client, tenant, raw_db):
+    _make_super_admin(raw_db, tenant)
+    headers = tenant.auth_headers(client)
+    coupon_code = f"EXPIRED-{unique_slug('c')}"
+    _create_coupon(client, headers, coupon_code, valid_to="2020-01-01")
+
+    res = client.post(f"/api/v1/crm/coupons/{coupon_code}/redeem", headers=headers)
+    assert res.status_code == 409

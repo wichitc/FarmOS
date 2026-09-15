@@ -540,3 +540,19 @@ Next increment (master prompt §37), following the vendor CRM (Phase 19) and Sup
 - **No self-service upgrade/downgrade** — plan changes are platform-staff-only (`require_platform_super_admin`); there is no tenant-initiated "upgrade my plan" flow, which would need real payment collection anyway (out of scope, see above)
 - **No proration, invoicing, or billing history** — `current_period_start`/`current_period_end` exist on `Subscription` but nothing populates or bills against them yet
 - **Trial expiry has no automatic consequence** — `trial_ends_at` passing does not itself change `status` from `trialing` to anything else; there is no scheduled job watching for it (same class of gap as the SLA-breach-alerting deferral in Phase 20)
+
+## Master-prompt integration, Phase 22: Marketing (Campaigns & Coupons)
+
+Completes the vendor CRM module's three-way split from the master prompt: Lead/Customer/Opportunity (Phase 19, pipeline), SupportTicket (Phase 20, post-sale), and now Campaign/Coupon (§9, pre-sale marketing) - the one remaining CRM piece flagged as deferred after Phase 20.
+
+- [x] **`Campaign`** (`backend/app/crm/models.py`, migration `0021_marketing_campaigns.py`): code/name/channel/status lifecycle (`draft→active→paused→completed`), budget, UTM fields, platform-staff-managed
+- [x] **`Lead.campaign_id` attribution**: `POST /api/v1/crm/leads` (still the one public, unauthenticated endpoint) accepts an optional `campaign_code`; an unknown code is silently ignored rather than rejecting an otherwise-valid lead over a tracking parameter — verified live, both the happy path and the unknown-code path
+- [x] **`Coupon`** — pure discount data (validity window, max redemptions, applicable plan code), **not** wired to any real price: `POST /coupons/{code}/redeem` validates (active / within date range / under redemption limit) and increments a counter, but changes no price anywhere, since there is no billing engine in this platform to apply a discount to (consistent with Phase 21's explicit no-payment-processing stance) — verified live
+- [x] Automated tests (`backend/tests/test_crm.py`): campaign creation + channel/status validation, lead capture attribution (both a real and an unknown campaign code) plus listing a campaign's leads, coupon redemption lifecycle (including the redemption-limit 409 and unknown-code 404), and an expired coupon rejected
+- [x] Verified live: created a real campaign, captured a lead attributed to it, created and redeemed a coupon (redemption count incrementing correctly)
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **No email sending** — master prompt §9 lists "Email" as a marketing capability; sending one needs a provider decision (SendGrid/SES/SMTP), the same class of vendor decision already deferred for LLM (ADR-011) and RAG/vector-DB (Phase 19's checklist). `Campaign` tracks channel/budget/attribution; nothing in this platform actually sends anything
+- **Coupon has no runtime application point** — since no billing engine exists to apply a discount to (Phase 21), a redeemed coupon's effect is entirely manual/informational today; wiring it to a real subscription change is additive once billing exists
+- **This closes out the master prompt's original CRM/Support/Marketing scope (§9-11)**. Remaining master-prompt deferrals, in the same order previously documented: RAG/Knowledge Base + vector DB (vendor decision), expanded multi-agent taxonomy (additive policy on the existing L0-L4 gateway), n8n automation (external tool), sensor simulator + demo seed data, and the public marketing site/PWA/any frontend (out of scope per the standing backend-only decision)
