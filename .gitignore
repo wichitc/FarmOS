@@ -31,6 +31,10 @@ backend/.env
 backend/data/models/*
 !backend/data/models/.gitkeep
 
+# Demo device credentials (plaintext secrets, written by seed_demo.py -
+# see backend/app/scripts/seed_demo.py's module docstring)
+backend/data/*devices*.json
+
 # Stray data dir (created if DATA_DIR was ever misconfigured as a relative path)
 /data/
 
