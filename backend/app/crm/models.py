@@ -20,14 +20,25 @@ a real operational `Tenant`, at which point `POST
 operational-platform identity are related but distinct records, not
 collapsed into one.
 
-Marketing/Campaign and Support/Ticket/Knowledge-Base (master prompt §9,
-§11) are explicitly not built this pass - see docs/05-RTM.md's
-completion checklist for this phase.
+`SupportTicket`/`TicketMessage` (master prompt §11, picked up in the
+Phase 20 follow-on) are the odd ones out in this module: unlike
+Lead/Customer/Opportunity, a ticket's *creation* and *reply* are things an
+ordinary tenant user does about their own tenant, not something only
+platform staff touch. They still aren't `TenantScopedMixin`/RLS-protected
+(support staff must see tickets *across* tenants, which RLS would
+prevent), so `tenant_id` here is a plain nullable FK and
+`routers/v1/crm.py` enforces "your own tenant's tickets, or all of them
+if you're platform staff" in code instead - a documented, deliberate
+exception to this platform's usual RLS-first tenant-isolation pattern,
+justified by who actually needs cross-tenant visibility here.
+
+Marketing/Campaign and Knowledge-Base (master prompt §9, §11) remain
+explicitly not built - see docs/05-RTM.md's completion checklist.
 """
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +48,13 @@ from ..foundation.models import gen_uuid
 LEAD_STATUSES = ("new", "contacted", "qualified", "demo_scheduled", "proposal", "converted", "lost")
 OPPORTUNITY_STAGES = ("pipeline", "demo", "proposal", "negotiation", "won", "lost")
 CUSTOMER_STATUSES = ("trial", "active", "churned")
+TICKET_STATUSES = ("open", "in_progress", "waiting_on_customer", "resolved", "closed")
+TICKET_PRIORITIES = ("low", "medium", "high", "urgent")
+TICKET_CATEGORIES = ("billing", "technical", "feature_request", "bug", "other")
+# FR-SUPPORT (indicative defaults, not a contractual SLA - same "shape
+# now" treatment as health.py's threshold table): hours-to-first-response
+# by priority.
+TICKET_SLA_HOURS = {"urgent": 4, "high": 24, "medium": 72, "low": 168}
 
 
 def _uuid_pk() -> Mapped[str]:
@@ -96,3 +114,36 @@ class Opportunity(PlatformEntityMixin, Base):
     probability_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     expected_close_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class SupportTicket(PlatformEntityMixin, Base):
+    __tablename__ = "crm_support_tickets"
+
+    id: Mapped[str] = _uuid_pk()
+    tenant_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("tenants.id"), nullable=True, index=True)
+    customer_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("crm_customers.id"), nullable=True)
+    requester_name: Mapped[str] = mapped_column(String(255))
+    requester_email: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(255))
+    category: Mapped[str] = mapped_column(String(30), default="other")
+    priority: Mapped[str] = mapped_column(String(10), default="medium")
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    sla_due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_to: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TicketMessage(Base):
+    """Append-only conversation thread - no update/delete route, same
+    shape as `TwinEvent`/`AuditEntry`."""
+
+    __tablename__ = "crm_ticket_messages"
+
+    id: Mapped[str] = _uuid_pk()
+    ticket_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("crm_support_tickets.id", ondelete="CASCADE"), index=True)
+    author_type: Mapped[str] = mapped_column(String(20))  # "customer" | "agent" | "system"
+    author_user_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
+    author_name: Mapped[str] = mapped_column(String(255))
+    body: Mapped[str] = mapped_column(Text)
+    is_internal_note: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

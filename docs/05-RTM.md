@@ -503,3 +503,21 @@ A separate "AI Agriculture" master prompt (a different, broader product brief �
 - **Expanded multi-agent taxonomy** (§28's eleven named agents) — Phase 15 already built one shared, generic Agent Action Gateway (L0-L4) rather than per-domain agent classes; the master prompt's richer agent tree is additive *policy/registration* work on top of that gateway, not a new execution mechanism
 - **n8n automation** (§4) — an external orchestration tool, not application code this repo builds
 - **Sensor simulator, demo tenant/seed data** (§46-47, §51) — buildable without a vendor decision; simply not yet picked up
+
+## Master-prompt integration, Phase 20: Support Tickets
+
+Next increment of the vendor CRM (master prompt §11), following Phase 19's Lead/Customer/Opportunity pipeline.
+
+- [x] **`SupportTicket`/`TicketMessage`** (`backend/app/crm/models.py`, migration `0019_support_tickets.py`) — the one CRM entity where an *ordinary tenant user* (not just platform staff) is a first-class actor: they create tickets and reply on their own tenant's thread. Not RLS-scoped (support staff need cross-tenant visibility, which RLS would block); `routers/v1/crm.py::_assert_ticket_access` enforces "your own tenant's ticket, or any of them if you're platform staff" in code instead — a documented, deliberate exception to this platform's usual RLS-first isolation, justified by who actually needs cross-tenant visibility here
+- [x] **SLA due-by-priority** (`TICKET_SLA_HOURS`: urgent=4h/high=24h/medium=72h/low=168h) computed at ticket creation — indicative defaults, not a contractual SLA, same "shape now" treatment `health.py`'s threshold table already established
+- [x] **Internal notes are staff-only**: a customer's `is_internal_note` request is silently forced to `false` server-side (never trusted from the request body for a non-admin caller); `GET .../messages` filters internal notes out entirely for non-staff viewers, verified both that staff see them and customers don't
+- [x] **A customer reply reopens a `waiting_on_customer` ticket** to `in_progress` automatically — the one ticket-status transition a customer's own action can trigger; every other status change (`resolved`, `closed`, priority, assignment) is a platform-staff-only `PATCH`
+- [x] Automated tests (`backend/tests/test_crm.py`): SLA computed + first message recorded on creation, category/priority validation, cross-tenant access denied (both direct `GET` and list-filtering), platform-staff can see/manage tickets across tenants while a regular tenant admin cannot, internal-note visibility split, and the waiting-on-customer auto-reopen
+- [x] Verified live: created a real ticket via a bootstrapped tenant and confirmed the SLA due-time and first message both landed correctly
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **No Knowledge Base** (§11's "AI Support Agent -> Knowledge Base -> Answer -> Human Escalation" flow) — ties into the same RAG/vector-DB vendor decision already deferred from Phase 19; a ticket can be created and worked today, just not auto-answered from a knowledge base first
+- **No attachment support** — §11 lists attachments as a ticket capability; no file-upload endpoint exists anywhere in this platform yet (SEC-005 is itself still deferred, see Phase 18's checklist), so there's nothing to attach to yet
+- **No SLA breach alerting** — `sla_due_at` is computed and stored, but nothing watches for it passing; wiring that to the existing `Alert`/notification system (Phase 7) is additive, not built this pass
+- **Marketing/Campaign** (§9) — still the one remaining piece of the master prompt's CRM section (§9-11) not yet picked up

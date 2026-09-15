@@ -98,3 +98,52 @@ class OpportunityOut(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TicketCreate(BaseModel):
+    subject: str
+    category: str = "other"
+    priority: str = "medium"
+    message: str
+
+
+class TicketOut(BaseModel):
+    id: str
+    tenant_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    requester_name: str
+    requester_email: str
+    subject: str
+    category: str
+    priority: str
+    status: str
+    sla_due_at: Optional[datetime] = None
+    assigned_to: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TicketUpdate(BaseModel):
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    assigned_to: Optional[str] = None
+
+
+class TicketMessageCreate(BaseModel):
+    body: str
+    is_internal_note: bool = False
+
+
+class TicketMessageOut(BaseModel):
+    id: str
+    ticket_id: str
+    author_type: str
+    author_user_id: Optional[str] = None
+    author_name: str
+    body: str
+    is_internal_note: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

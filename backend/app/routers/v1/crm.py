@@ -1,9 +1,10 @@
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from ...core.deps import require_platform_super_admin
+from ...core.deps import get_current_user, require_platform_super_admin
 from ...crm import models as crm_models
 from ...crm import schemas as crm_schemas
 from ...database import get_db
@@ -290,3 +291,172 @@ def update_opportunity(
     )
     db.commit()
     return opportunity
+
+
+# ---------------------------------------------------------------------------
+# Support tickets (master prompt §11, Phase 20 follow-on). Unlike the
+# pipeline above, an ordinary authenticated tenant user (not just platform
+# staff) can create a ticket and reply on their own tenant's tickets -
+# `_assert_ticket_access` is the code-level "your own tenant, or all of
+# them if you're platform staff" check that stands in for RLS here (see
+# `crm/models.py`'s module docstring for why this table isn't RLS-scoped).
+# ---------------------------------------------------------------------------
+
+def _assert_ticket_access(user: fm.User, ticket: crm_models.SupportTicket) -> None:
+    if user.is_platform_super_admin:
+        return
+    if ticket.tenant_id == user.tenant_id:
+        return
+    raise HTTPException(status_code=403, detail="Not your organization's ticket")
+
+
+@router.post("/tickets", response_model=crm_schemas.TicketOut, status_code=201)
+def create_ticket(
+    payload: crm_schemas.TicketCreate,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(get_current_user),
+):
+    if payload.category not in crm_models.TICKET_CATEGORIES:
+        raise HTTPException(status_code=422, detail=f"Unknown category '{payload.category}'")
+    if payload.priority not in crm_models.TICKET_PRIORITIES:
+        raise HTTPException(status_code=422, detail=f"Unknown priority '{payload.priority}'")
+
+    customer = db.query(crm_models.Customer).filter(crm_models.Customer.tenant_id == current_user.tenant_id).first()
+    sla_hours = crm_models.TICKET_SLA_HOURS[payload.priority]
+
+    ticket = crm_models.SupportTicket(
+        tenant_id=current_user.tenant_id,
+        customer_id=customer.id if customer else None,
+        requester_name=current_user.full_name,
+        requester_email=current_user.email,
+        subject=payload.subject,
+        category=payload.category,
+        priority=payload.priority,
+        status="open",
+        sla_due_at=datetime.now(timezone.utc) + timedelta(hours=sla_hours),
+        created_by=current_user.id,
+        updated_by=current_user.id,
+    )
+    db.add(ticket)
+    db.flush()
+
+    db.add(
+        crm_models.TicketMessage(
+            ticket_id=ticket.id, author_type="customer", author_user_id=current_user.id,
+            author_name=current_user.full_name, body=payload.message,
+        )
+    )
+
+    record_audit(
+        db, tenant_id=current_user.tenant_id, actor_user_id=current_user.id,
+        action="crm_ticket.create", entity_type="crm_support_ticket", entity_id=ticket.id,
+        new_values={"subject": ticket.subject, "priority": ticket.priority},
+    )
+    db.commit()
+    return ticket
+
+
+@router.get("/tickets", response_model=list[crm_schemas.TicketOut])
+def list_tickets(
+    status: Optional[str] = Query(default=None),
+    priority: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(get_current_user),
+):
+    query = db.query(crm_models.SupportTicket)
+    if not current_user.is_platform_super_admin:
+        query = query.filter(crm_models.SupportTicket.tenant_id == current_user.tenant_id)
+    if status:
+        query = query.filter(crm_models.SupportTicket.status == status)
+    if priority:
+        query = query.filter(crm_models.SupportTicket.priority == priority)
+    return query.order_by(crm_models.SupportTicket.created_at.desc()).all()
+
+
+@router.get("/tickets/{ticket_id}", response_model=crm_schemas.TicketOut)
+def get_ticket(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(get_current_user),
+):
+    ticket = _get_or_404(db, crm_models.SupportTicket, ticket_id, "Ticket")
+    _assert_ticket_access(current_user, ticket)
+    return ticket
+
+
+@router.patch("/tickets/{ticket_id}", response_model=crm_schemas.TicketOut)
+def update_ticket(
+    ticket_id: str,
+    payload: crm_schemas.TicketUpdate,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_platform_super_admin),
+):
+    """Status/priority/assignment changes are platform-staff actions -
+    a customer's own input happens via replying on the ticket, not by
+    directly setting its status."""
+    ticket = _get_or_404(db, crm_models.SupportTicket, ticket_id, "Ticket")
+    if payload.priority is not None and payload.priority not in crm_models.TICKET_PRIORITIES:
+        raise HTTPException(status_code=422, detail=f"Unknown priority '{payload.priority}'")
+    if payload.status is not None and payload.status not in crm_models.TICKET_STATUSES:
+        raise HTTPException(status_code=422, detail=f"Unknown status '{payload.status}'")
+
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        setattr(ticket, field, value)
+    if payload.status == "resolved" and ticket.resolved_at is None:
+        ticket.resolved_at = datetime.now(timezone.utc)
+    ticket.updated_by = current_user.id
+    db.flush()
+
+    record_audit(
+        db, tenant_id=current_user.tenant_id, actor_user_id=current_user.id,
+        action="crm_ticket.update", entity_type="crm_support_ticket", entity_id=ticket.id,
+        new_values=changes,
+    )
+    db.commit()
+    return ticket
+
+
+@router.post("/tickets/{ticket_id}/messages", response_model=crm_schemas.TicketMessageOut, status_code=201)
+def add_ticket_message(
+    ticket_id: str,
+    payload: crm_schemas.TicketMessageCreate,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(get_current_user),
+):
+    ticket = _get_or_404(db, crm_models.SupportTicket, ticket_id, "Ticket")
+    _assert_ticket_access(current_user, ticket)
+
+    is_agent = current_user.is_platform_super_admin
+    message = crm_models.TicketMessage(
+        ticket_id=ticket.id,
+        author_type="agent" if is_agent else "customer",
+        author_user_id=current_user.id,
+        author_name=current_user.full_name,
+        body=payload.body,
+        # Only platform staff may leave a note the customer can't see.
+        is_internal_note=payload.is_internal_note if is_agent else False,
+    )
+    db.add(message)
+    if not is_agent and ticket.status == "waiting_on_customer":
+        ticket.status = "in_progress"
+    ticket.updated_by = current_user.id
+    db.commit()
+    return message
+
+
+@router.get("/tickets/{ticket_id}/messages", response_model=list[crm_schemas.TicketMessageOut])
+def list_ticket_messages(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(get_current_user),
+):
+    ticket = _get_or_404(db, crm_models.SupportTicket, ticket_id, "Ticket")
+    _assert_ticket_access(current_user, ticket)
+
+    query = db.query(crm_models.TicketMessage).filter(crm_models.TicketMessage.ticket_id == ticket_id)
+    if not current_user.is_platform_super_admin:
+        # Internal notes are platform-staff-only, regardless of who else
+        # can see the rest of the thread.
+        query = query.filter(crm_models.TicketMessage.is_internal_note.is_(False))
+    return query.order_by(crm_models.TicketMessage.created_at.asc()).all()

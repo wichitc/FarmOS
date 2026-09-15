@@ -1,7 +1,7 @@
 from app.core.deps import set_tenant_context
 from app.foundation import models as fm
 
-from .conftest import unique_slug
+from .conftest import provision_test_tenant, unique_slug
 
 
 def _make_super_admin(raw_db, tenant):
@@ -144,3 +144,142 @@ def test_opportunity_pipeline(client, tenant, raw_db):
 
     list_res = client.get("/api/v1/crm/opportunities", params={"stage": "won"}, headers=headers)
     assert opportunity["id"] in [o["id"] for o in list_res.json()]
+
+
+def _create_ticket(client, headers, subject="Cannot see IoT sensor data", priority="high", category="technical"):
+    res = client.post(
+        "/api/v1/crm/tickets",
+        json={"subject": subject, "category": category, "priority": priority, "message": "Please help, sensors show no data."},
+        headers=headers,
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_ticket_creation_computes_sla_and_records_first_message(client, tenant):
+    headers = tenant.auth_headers(client)
+    ticket = _create_ticket(client, headers, priority="urgent")
+    assert ticket["status"] == "open"
+    assert ticket["sla_due_at"] is not None
+    assert ticket["tenant_id"] == tenant.tenant_id
+
+    messages_res = client.get(f"/api/v1/crm/tickets/{ticket['id']}/messages", headers=headers)
+    assert messages_res.status_code == 200
+    messages = messages_res.json()
+    assert len(messages) == 1
+    assert messages[0]["author_type"] == "customer"
+    assert "sensors show no data" in messages[0]["body"]
+
+
+def test_ticket_category_and_priority_validation(client, tenant):
+    headers = tenant.auth_headers(client)
+    bad_category_res = client.post(
+        "/api/v1/crm/tickets", json={"subject": "x", "category": "not-a-category", "message": "m"}, headers=headers
+    )
+    assert bad_category_res.status_code == 422
+
+    bad_priority_res = client.post(
+        "/api/v1/crm/tickets", json={"subject": "x", "priority": "not-a-priority", "message": "m"}, headers=headers
+    )
+    assert bad_priority_res.status_code == 422
+
+
+def test_ticket_isolated_from_other_tenants(client, tenant, raw_db):
+    headers = tenant.auth_headers(client)
+    ticket = _create_ticket(client, headers)
+
+    other_tenant = provision_test_tenant(raw_db, "othertenant")
+    other_headers = other_tenant.auth_headers(client)
+
+    denied_res = client.get(f"/api/v1/crm/tickets/{ticket['id']}", headers=other_headers)
+    assert denied_res.status_code == 403
+
+    list_res = client.get("/api/v1/crm/tickets", headers=other_headers)
+    assert ticket["id"] not in [t["id"] for t in list_res.json()]
+
+    own_list_res = client.get("/api/v1/crm/tickets", headers=headers)
+    assert ticket["id"] in [t["id"] for t in own_list_res.json()]
+
+
+def test_platform_admin_sees_and_manages_all_tickets(client, tenant, raw_db):
+    _make_super_admin(raw_db, tenant)
+    admin_headers = tenant.auth_headers(client)
+
+    other_tenant = provision_test_tenant(raw_db, "ticketother")
+    other_headers = other_tenant.auth_headers(client)
+    ticket = _create_ticket(client, other_headers)
+
+    admin_get_res = client.get(f"/api/v1/crm/tickets/{ticket['id']}", headers=admin_headers)
+    assert admin_get_res.status_code == 200
+
+    resolve_res = client.patch(
+        f"/api/v1/crm/tickets/{ticket['id']}", json={"status": "resolved"}, headers=admin_headers
+    )
+    assert resolve_res.status_code == 200, resolve_res.text
+    assert resolve_res.json()["status"] == "resolved"
+    assert resolve_res.json()["resolved_at"] is not None
+
+    bad_status_res = client.patch(
+        f"/api/v1/crm/tickets/{ticket['id']}", json={"status": "not-a-status"}, headers=admin_headers
+    )
+    assert bad_status_res.status_code == 422
+
+    # A regular tenant admin (not platform staff) cannot update ticket status.
+    regular_denied_res = client.patch(
+        f"/api/v1/crm/tickets/{ticket['id']}", json={"status": "closed"}, headers=other_headers
+    )
+    assert regular_denied_res.status_code == 403
+
+
+def test_internal_note_hidden_from_customer_but_visible_to_staff(client, tenant, raw_db):
+    _make_super_admin(raw_db, tenant)
+    admin_headers = tenant.auth_headers(client)
+
+    other_tenant = provision_test_tenant(raw_db, "ticketnote")
+    customer_headers = other_tenant.auth_headers(client)
+    ticket = _create_ticket(client, customer_headers)
+
+    # Customer cannot force an internal note - forced False.
+    customer_reply_res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages",
+        json={"body": "Any update?", "is_internal_note": True},
+        headers=customer_headers,
+    )
+    assert customer_reply_res.status_code == 201
+    assert customer_reply_res.json()["is_internal_note"] is False
+    assert customer_reply_res.json()["author_type"] == "customer"
+
+    note_res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages",
+        json={"body": "Escalate to engineering internally", "is_internal_note": True},
+        headers=admin_headers,
+    )
+    assert note_res.status_code == 201
+    assert note_res.json()["is_internal_note"] is True
+    assert note_res.json()["author_type"] == "agent"
+
+    customer_view_res = client.get(f"/api/v1/crm/tickets/{ticket['id']}/messages", headers=customer_headers)
+    customer_bodies = [m["body"] for m in customer_view_res.json()]
+    assert "Escalate to engineering internally" not in customer_bodies
+
+    staff_view_res = client.get(f"/api/v1/crm/tickets/{ticket['id']}/messages", headers=admin_headers)
+    staff_bodies = [m["body"] for m in staff_view_res.json()]
+    assert "Escalate to engineering internally" in staff_bodies
+
+
+def test_customer_reply_reopens_waiting_on_customer_ticket(client, tenant, raw_db):
+    _make_super_admin(raw_db, tenant)
+    admin_headers = tenant.auth_headers(client)
+
+    other_tenant = provision_test_tenant(raw_db, "ticketreopen")
+    customer_headers = other_tenant.auth_headers(client)
+    ticket = _create_ticket(client, customer_headers)
+
+    client.patch(f"/api/v1/crm/tickets/{ticket['id']}", json={"status": "waiting_on_customer"}, headers=admin_headers)
+
+    client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages", json={"body": "Here is the info you asked for"}, headers=customer_headers
+    )
+
+    get_res = client.get(f"/api/v1/crm/tickets/{ticket['id']}", headers=admin_headers)
+    assert get_res.json()["status"] == "in_progress"
