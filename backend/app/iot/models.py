@@ -45,6 +45,13 @@ class IotDevice(TenantScopedMixin, Base):
     gateway_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("iot_devices.id"), nullable=True)
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=False)
+    # SEC-006 ("device authentication shall be per-device, revocable"): a
+    # deactivated device's secret is checked here, not just hidden from
+    # this row's own auth path - `ingestion.py::process_reading` rejects
+    # every reading from an inactive device outright, even one presenting
+    # a still-correct secret. `rotate_secret`/`deactivate`/`reactivate`
+    # (routers/v1/iot.py) are the only ways to change this state.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class Rule(TenantScopedMixin, Base):

@@ -2,19 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ...core.deps import get_current_user
+from ...core.deps import require_platform_super_admin
 from ...database import get_db
 from ...foundation import models as fm
 from ...foundation.schemas import TenantCreate, TenantOut
 from ...foundation.seed import provision_tenant
 
 router = APIRouter(prefix="/api/v1/tenants", tags=["tenants"])
-
-
-def require_platform_super_admin(current_user: fm.User = Depends(get_current_user)) -> fm.User:
-    if not current_user.is_platform_super_admin:
-        raise HTTPException(status_code=403, detail="Requires platform super admin")
-    return current_user
 
 
 @router.get("", response_model=list[TenantOut])

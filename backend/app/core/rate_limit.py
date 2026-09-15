@@ -20,12 +20,15 @@ code branching - see `docs/05-RTM.md`'s Phase 18 checklist for the
 `docker compose run` invocation this requires.
 """
 import asyncio
+import logging
 from dataclasses import dataclass
 
 import redis.asyncio as aioredis
 from starlette.requests import Request
 
 from ..config import settings
+
+log = logging.getLogger("app.rate_limit")
 
 # Keyed by event loop id, not a single module-level client: an
 # `aioredis.Redis` connection pool is bound to the event loop it was
@@ -59,6 +62,11 @@ def _rule_for(path: str, method: str) -> RateLimitRule:
         return RateLimitRule(limit=settings.rate_limit_login_per_minute)
     if path.startswith("/api/v1/harvest/trace/"):
         return RateLimitRule(limit=settings.rate_limit_public_per_minute)
+    if path == "/api/v1/crm/leads" and method == "POST":
+        # The landing-page contact form - the other deliberately public,
+        # unauthenticated endpoint in this platform, same abuse-protection
+        # tier as the QR-trace lookup above.
+        return RateLimitRule(limit=settings.rate_limit_public_per_minute)
     return RateLimitRule(limit=settings.rate_limit_default_per_minute)
 
 
@@ -89,6 +97,12 @@ async def check_rate_limit(request: Request) -> tuple[bool, RateLimitRule, int]:
             ttl = await client.ttl(key)
             return False, rule, max(ttl, 1)
         return True, rule, 0
-    except Exception:
-        # Redis unavailable - fail open (NFR-004).
+    except Exception as exc:
+        # Redis unavailable - fail open (NFR-004). Logged at warning level
+        # (not silently swallowed) so this is visible in the structured
+        # logs an operator would actually be watching - the earlier bug
+        # this phase found (a stale client silently failing open on every
+        # request from a recycled event loop) went unnoticed specifically
+        # because this branch previously logged nothing at all.
+        log.warning("Rate limiter unavailable, failing open: %s", exc)
         return True, rule, 0

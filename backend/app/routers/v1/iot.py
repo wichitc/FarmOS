@@ -114,6 +114,96 @@ def get_device(
     return device
 
 
+@router.post("/devices/{device_id}/rotate-secret", response_model=iot_schemas.DeviceRegisterOut)
+def rotate_device_secret(
+    device_id: str,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("iot.device.manage")),
+):
+    """SEC-006: revocable, per-device auth - a compromised or leaked
+    secret can be replaced without deleting/re-registering the device
+    (which would orphan its digital twin and telemetry history). Returns
+    the new plaintext secret exactly once, same one-time-reveal pattern as
+    registration; the old secret stops working immediately."""
+    device = _get_or_404(db, iot_models.IotDevice, device_id, "Device")
+    assert_farm_scope(db, current_user, "iot.device.manage", device.farm_id)
+
+    new_secret = secrets.token_urlsafe(32)
+    device.hashed_secret = hash_password(new_secret)
+    device.updated_by = current_user.id
+    db.flush()
+
+    record_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        actor_user_id=current_user.id,
+        action="iot_device.rotate_secret",
+        entity_type="iot_device",
+        entity_id=device.id,
+    )
+    db.commit()
+    return iot_schemas.DeviceRegisterOut(**iot_schemas.DeviceOut.model_validate(device).model_dump(), secret=new_secret)
+
+
+@router.post("/devices/{device_id}/deactivate", response_model=iot_schemas.DeviceOut)
+def deactivate_device(
+    device_id: str,
+    payload: iot_schemas.DeviceDeactivateRequest,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("iot.device.manage")),
+):
+    """SEC-006: actually revokes the device - `ingestion.process_reading`
+    rejects every subsequent reading outright, even one presenting a
+    still-correct secret, until reactivated."""
+    device = _get_or_404(db, iot_models.IotDevice, device_id, "Device")
+    assert_farm_scope(db, current_user, "iot.device.manage", device.farm_id)
+    if not device.is_active:
+        raise HTTPException(status_code=409, detail="Device is already deactivated")
+
+    device.is_active = False
+    device.updated_by = current_user.id
+    db.flush()
+
+    record_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        actor_user_id=current_user.id,
+        action="iot_device.deactivate",
+        entity_type="iot_device",
+        entity_id=device.id,
+        reason=payload.reason,
+    )
+    db.commit()
+    return device
+
+
+@router.post("/devices/{device_id}/reactivate", response_model=iot_schemas.DeviceOut)
+def reactivate_device(
+    device_id: str,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("iot.device.manage")),
+):
+    device = _get_or_404(db, iot_models.IotDevice, device_id, "Device")
+    assert_farm_scope(db, current_user, "iot.device.manage", device.farm_id)
+    if device.is_active:
+        raise HTTPException(status_code=409, detail="Device is already active")
+
+    device.is_active = True
+    device.updated_by = current_user.id
+    db.flush()
+
+    record_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        actor_user_id=current_user.id,
+        action="iot_device.reactivate",
+        entity_type="iot_device",
+        entity_id=device.id,
+    )
+    db.commit()
+    return device
+
+
 # ---------------------------------------------------------------------------
 # Rules (FR-IOT-004) - tenant-wide, not farm-scoped (a rule targets a
 # TwinType, which is tenant-level configuration, same as Crop/Variety).

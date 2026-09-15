@@ -1,11 +1,14 @@
+import time
 import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .config import settings
+from .core.logging import CorrelationIdMiddleware, configure_logging
+from .core.metrics import CONTENT_TYPE_LATEST, REQUEST_COUNT, REQUEST_DURATION_SECONDS, generate_latest
 from .core.rate_limit import check_rate_limit
 from .routers import dashboard as dashboard_router
 from .routers import equipment as equipment_router
@@ -16,6 +19,7 @@ from .routers.v1 import accounting as accounting_router_v1
 from .routers.v1 import audit as audit_router_v1
 from .routers.v1 import auth as auth_router_v1
 from .routers.v1 import config as config_router_v1
+from .routers.v1 import crm as crm_router_v1
 from .routers.v1 import crophealth as crophealth_router_v1
 from .routers.v1 import dashboard as dashboard_router_v1
 from .routers.v1 import farm as farm_router_v1
@@ -26,6 +30,7 @@ from .routers.v1 import iot as iot_router_v1
 from .routers.v1 import irrigation as irrigation_router_v1
 from .routers.v1 import master_data as master_data_router_v1
 from .routers.v1 import notifications as notifications_router_v1
+from .routers.v1 import reporting as reporting_router_v1
 from .routers.v1 import roles as roles_router_v1
 from .routers.v1 import sales as sales_router_v1
 from .routers.v1 import tenants as tenants_router_v1
@@ -41,6 +46,8 @@ from .routers.v1 import workflow as workflow_router_v1
 # no longer called anywhere. Run `alembic upgrade head` before starting the
 # app (see backend/README or docker-compose's migrate step).
 
+configure_logging()
+
 app = FastAPI(title="FruitTwin AI Platform API")
 
 app.add_middleware(
@@ -53,21 +60,31 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def correlation_id_middleware(request: Request, call_next):
-    correlation_id = request.headers.get("x-correlation-id") or str(uuid.uuid4())
-    request.state.correlation_id = correlation_id
+async def metrics_middleware(request: Request, call_next):
+    """NFR-009: Prometheus-compatible request count + latency. Excludes
+    `/metrics` itself from being counted (scraping it would otherwise show
+    up as one more request to explain in its own output)."""
+    if request.url.path == "/metrics":
+        return await call_next(request)
+
+    start = time.perf_counter()
     response = await call_next(request)
-    response.headers["X-Correlation-Id"] = correlation_id
+    duration = time.perf_counter() - start
+
+    route = request.scope.get("route")
+    path_label = route.path if route is not None else request.url.path
+    REQUEST_COUNT.labels(method=request.method, path=path_label, status=response.status_code).inc()
+    REQUEST_DURATION_SECONDS.labels(method=request.method, path=path_label).observe(duration)
     return response
 
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     """SEC-007: see `core/rate_limit.py`. Builds its own correlation id
-    (same fallback logic as `correlation_id_middleware`) rather than
-    relying on `request.state.correlation_id` having already been set -
-    keeps this middleware correct regardless of the two middlewares'
-    relative stack order."""
+    as a fallback in the 429 body/headers rather than assuming
+    `request.state.correlation_id` is already set - defensive, since
+    `CorrelationIdMiddleware` below is registered as the outermost layer
+    precisely so it normally already has been."""
     allowed, rule, retry_after = await check_rate_limit(request)
     if not allowed:
         correlation_id = request.headers.get("x-correlation-id") or str(uuid.uuid4())
@@ -98,6 +115,13 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     return response
+
+
+# Registered last so it becomes the *outermost* layer (Starlette wraps
+# middleware in reverse registration order) - see `CorrelationIdMiddleware`'s
+# docstring for why the correlation id contextvar needs to be set before
+# any `@app.middleware("http")`-based middleware runs, not after.
+app.add_middleware(CorrelationIdMiddleware)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -148,6 +172,8 @@ app.include_router(audit_router_v1.router)
 app.include_router(ai_router_v1.router)
 app.include_router(dashboard_router_v1.router)
 app.include_router(work_router_v1.router)
+app.include_router(reporting_router_v1.router)
+app.include_router(crm_router_v1.router)
 
 
 @app.get("/api/status")
@@ -163,3 +189,8 @@ def health():
 @app.get("/ready")
 def ready():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

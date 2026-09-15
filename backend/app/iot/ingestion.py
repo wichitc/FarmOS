@@ -44,10 +44,15 @@ def process_reading(
     secret: str,
     recorded_at: Optional[datetime] = None,
 ) -> ProcessResult:
-    """FR-IOT-003 validation stage (secret check) then storage/rules. A
-    wrong secret is rejected with no side effects at all - it never touches
-    `last_seen_at` or telemetry, so a device with a stale/rotated secret
-    doesn't get to look "online" by failing loudly in the right place."""
+    """FR-IOT-003 validation stage (active check, then secret check) then
+    storage/rules. Either rejection has no side effects at all - it never
+    touches `last_seen_at` or telemetry, so a deactivated or
+    wrong-secret device doesn't get to look "online" by failing loudly in
+    the right place. The active check runs first and rejects outright
+    even with a correct secret (SEC-006: revocation must actually revoke,
+    not just hide the device from new registrations)."""
+    if not device.is_active:
+        return ProcessResult(accepted=False, reason="device_inactive")
     if not verify_password(secret, device.hashed_secret):
         return ProcessResult(accepted=False, reason="invalid_secret")
 

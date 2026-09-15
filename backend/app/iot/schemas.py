@@ -22,12 +22,17 @@ class DeviceOut(BaseModel):
     gateway_id: Optional[str] = None
     last_seen_at: Optional[datetime] = None
     is_online: bool
+    is_active: bool
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class DeviceRegisterOut(DeviceOut):
     secret: str
+
+
+class DeviceDeactivateRequest(BaseModel):
+    reason: Optional[str] = None
 
 
 class RuleCreate(BaseModel):

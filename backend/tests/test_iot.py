@@ -206,3 +206,67 @@ def test_device_farm_scoped_abac(client, tenant):
 
     denied_res = client.get(f"/api/v1/iot/devices/{device_b['id']}", headers=manager_headers)
     assert denied_res.status_code == 403
+
+
+def test_rotate_secret_invalidates_old_secret_and_issues_a_new_one(client, tenant, raw_db):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="IOTFARM8")
+    twin_type = _create_twin_type(client, headers, code="sensor8")
+    device_resp = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-rotate")
+
+    rotate_res = client.post(f"/api/v1/iot/devices/{device_resp['id']}/rotate-secret", headers=headers)
+    assert rotate_res.status_code == 200, rotate_res.text
+    rotated = rotate_res.json()
+    assert rotated["secret"]
+    assert rotated["secret"] != device_resp["secret"]
+
+    set_tenant_context(raw_db, tenant.tenant_id)
+    device = raw_db.get(iot_models.IotDevice, device_resp["id"])
+
+    old_secret_result = process_reading(raw_db, device=device, metric="temp_c", value=1.0, secret=device_resp["secret"])
+    assert old_secret_result.accepted is False
+    assert old_secret_result.reason == "invalid_secret"
+
+    new_secret_result = process_reading(raw_db, device=device, metric="temp_c", value=2.0, secret=rotated["secret"])
+    assert new_secret_result.accepted is True
+
+
+def test_deactivated_device_is_rejected_even_with_the_correct_secret(client, tenant, raw_db):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="IOTFARM9")
+    twin_type = _create_twin_type(client, headers, code="sensor9")
+    device_resp = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-deactivate")
+
+    deactivate_res = client.post(
+        f"/api/v1/iot/devices/{device_resp['id']}/deactivate", json={"reason": "device retired"}, headers=headers
+    )
+    assert deactivate_res.status_code == 200, deactivate_res.text
+    assert deactivate_res.json()["is_active"] is False
+
+    double_deactivate_res = client.post(f"/api/v1/iot/devices/{device_resp['id']}/deactivate", json={}, headers=headers)
+    assert double_deactivate_res.status_code == 409
+
+    set_tenant_context(raw_db, tenant.tenant_id)
+    device = raw_db.get(iot_models.IotDevice, device_resp["id"])
+    result = process_reading(raw_db, device=device, metric="temp_c", value=1.0, secret=device_resp["secret"])
+    assert result.accepted is False
+    assert result.reason == "device_inactive"
+    assert device.last_seen_at is None
+
+    reactivate_res = client.post(f"/api/v1/iot/devices/{device_resp['id']}/reactivate", headers=headers)
+    assert reactivate_res.status_code == 200, reactivate_res.text
+    assert reactivate_res.json()["is_active"] is True
+
+    # The reactivate call above ran on a different DB session (the test
+    # client's request), so `raw_db`'s identity map still holds the
+    # is_active=False object `.get()` returned earlier - expire it to
+    # force a fresh read, the same staleness this phase's `set_tenant_context`
+    # docstring already warns about for post-commit reads.
+    raw_db.expire_all()
+    set_tenant_context(raw_db, tenant.tenant_id)
+    device = raw_db.get(iot_models.IotDevice, device_resp["id"])
+    resumed_result = process_reading(raw_db, device=device, metric="temp_c", value=3.0, secret=device_resp["secret"])
+    assert resumed_result.accepted is True
+
+    double_reactivate_res = client.post(f"/api/v1/iot/devices/{device_resp['id']}/reactivate", headers=headers)
+    assert double_reactivate_res.status_code == 409

@@ -91,6 +91,19 @@ def user_has_permission(
     return False
 
 
+def require_platform_super_admin(current_user: fm.User = Depends(get_current_user)) -> fm.User:
+    """Gates platform-level, non-tenant-scoped resources (tenant
+    provisioning, the vendor CRM) - these aren't RLS-protected the way
+    tenant business data is (there's no `tenant_id` to scope by for a
+    prospect who isn't a tenant yet), so this super-admin check is what
+    makes them safe, not row-level filtering. Promoted here from
+    `routers/v1/tenants.py`'s local copy once a second router
+    (`routers/v1/crm.py`) needed the same gate."""
+    if not current_user.is_platform_super_admin:
+        raise HTTPException(status_code=403, detail="Requires platform super admin")
+    return current_user
+
+
 def require_permission(
     permission_code: str, scope_type: Optional[str] = None
 ) -> Callable[..., fm.User]:
