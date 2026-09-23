@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from ..crophealth import models as crophealth_models
 from ..inventory import models as inventory_models
 from ..iot import models as iot_models
+from ..knowledge import service as kb_service
 
 
 @dataclass
@@ -94,6 +95,24 @@ def _answer_low_stock(db: Session, tenant_id: str, farm_id: Optional[str]) -> Co
     return CopilotAnswer(content="\n".join(lines), citations=citations)
 
 
+def _answer_from_knowledge_base(db: Session, tenant_id: str, farm_id: Optional[str], question: str) -> Optional[CopilotAnswer]:
+    """The RAG groundwork's answer path (master-prompt integration §29,
+    Phase 25) - full-text search over this tenant's own knowledge
+    documents, not vector similarity (see `knowledge/models.py`'s module
+    docstring for why). Returns `None` on no match so the caller can fall
+    through to the final "I can't answer that" message, same as every
+    other route here never fabricating an answer."""
+    hits = kb_service.search_chunks(db, tenant_id=tenant_id, query=question, limit=3)
+    if not hits:
+        return None
+    lines = [f"From the knowledge base ({len(hits)} relevant passage(s)):"]
+    citations = []
+    for hit in hits:
+        lines.append(f"- [{hit.document.title}] {hit.chunk.content[:280]}")
+        citations.append(_citation("knowledge_chunk", hit.chunk.id, hit.document.created_at, hit.rank))
+    return CopilotAnswer(content="\n".join(lines), citations=citations)
+
+
 _ROUTES: list[tuple[tuple[str, ...], callable]] = [
     (("alert", "alarm"), _answer_open_alerts),
     (("disease", "incident", "pest"), _answer_disease_incidents),
@@ -106,10 +125,16 @@ def answer_question(db: Session, *, tenant_id: str, farm_id: Optional[str], ques
     for keywords, handler in _ROUTES:
         if any(kw in lowered for kw in keywords):
             return handler(db, tenant_id, farm_id)
+
+    kb_answer = _answer_from_knowledge_base(db, tenant_id, farm_id, question)
+    if kb_answer is not None:
+        return kb_answer
+
     return CopilotAnswer(
         content=(
             "I can currently only answer questions grounded in platform data about: "
-            "open alerts, open disease incidents, and low/reorder-point stock items. "
+            "open alerts, open disease incidents, low/reorder-point stock items, "
+            "and anything covered in your knowledge base documents. "
             "Try asking about one of those."
         )
     )

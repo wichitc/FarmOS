@@ -270,3 +270,67 @@ def test_deactivated_device_is_rejected_even_with_the_correct_secret(client, ten
 
     double_reactivate_res = client.post(f"/api/v1/iot/devices/{device_resp['id']}/reactivate", headers=headers)
     assert double_reactivate_res.status_code == 409
+
+
+def test_actuator_stop_command_always_executes_immediately(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="IOTFARM10")
+    twin_type = _create_twin_type(client, headers, code="pump10")
+    device = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-actuator-off")
+
+    res = client.post(f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "off"}, headers=headers)
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["command"] == "off"
+    assert body["status"] == "executed"
+
+    twin_res = client.get(f"/api/v1/twins/{device['digital_twin_id']}", headers=headers)
+    assert twin_res.json()["current_state"]["actuator_status"] == "off"
+
+
+def test_actuator_start_command_requires_confirmation(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="IOTFARM11")
+    twin_type = _create_twin_type(client, headers, code="pump11")
+    device = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-actuator-on")
+
+    denied_res = client.post(f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "on"}, headers=headers)
+    assert denied_res.status_code == 409
+
+    ok_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "on", "confirmed": True}, headers=headers
+    )
+    assert ok_res.status_code == 201, ok_res.text
+    assert ok_res.json()["status"] == "executed"
+
+    twin_res = client.get(f"/api/v1/twins/{device['digital_twin_id']}", headers=headers)
+    assert twin_res.json()["current_state"]["actuator_status"] == "on"
+
+
+def test_actuator_command_validation_and_deactivated_device(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="IOTFARM12")
+    twin_type = _create_twin_type(client, headers, code="pump12")
+    device = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-actuator-bad")
+
+    bad_command_res = client.post(f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "explode"}, headers=headers)
+    assert bad_command_res.status_code == 422
+
+    client.post(f"/api/v1/iot/devices/{device['id']}/deactivate", json={}, headers=headers)
+    deactivated_res = client.post(f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "off"}, headers=headers)
+    assert deactivated_res.status_code == 409
+
+
+def test_actuator_auto_and_schedule_commands_also_require_confirmation(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="IOTFARM13")
+    twin_type = _create_twin_type(client, headers, code="pump13")
+    device = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-actuator-auto")
+
+    for command in ("auto", "schedule"):
+        denied_res = client.post(f"/api/v1/iot/devices/{device['id']}/commands", json={"command": command}, headers=headers)
+        assert denied_res.status_code == 409
+        ok_res = client.post(
+            f"/api/v1/iot/devices/{device['id']}/commands", json={"command": command, "confirmed": True}, headers=headers
+        )
+        assert ok_res.status_code == 201, ok_res.text

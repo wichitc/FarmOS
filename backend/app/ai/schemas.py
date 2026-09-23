@@ -132,3 +132,18 @@ class CopilotAskResponse(BaseModel):
     conversation_id: str
     answer: str
     citations: list[dict]
+
+
+class ScoreFactorOut(BaseModel):
+    name: str
+    score: float
+    weight: float
+    explanation: str
+    has_data: bool
+
+
+class FarmScoreOut(BaseModel):
+    farm_id: str
+    score: int
+    band: str
+    factors: list[ScoreFactorOut]

@@ -61,6 +61,13 @@ ACTION_LEVEL_FLOORS: dict[str, str] = {
     "financial_posting": "L3",
     "record_deletion": "L3",
     "device_configuration_change": "L3",
+    # Master-prompt integration §25 (Actuator commands, Phase 26 follow-on):
+    # starting/scheduling ANY actuator (pump/valve/fan/fertilizer pump) is
+    # a "critical equipment command" under BR-002 - capped here same as
+    # the others. Stopping one is deliberately NOT in this dict (see
+    # `routers/v1/iot.py::send_actuator_command`): an e-stop should never
+    # be gated behind a confirmation step.
+    "actuator_start": "L3",
 }
 AGENT_ACTION_STATUSES = ("proposed", "pending_approval", "approved", "rejected", "executed", "failed", "cancelled")
 

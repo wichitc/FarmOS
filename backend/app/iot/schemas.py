@@ -35,6 +35,32 @@ class DeviceDeactivateRequest(BaseModel):
     reason: Optional[str] = None
 
 
+ACTUATOR_COMMANDS = ("on", "off", "auto", "schedule")
+
+
+class ActuatorCommandRequest(BaseModel):
+    """Master prompt §25. `confirmed` is the same-request human
+    confirmation an L2 agent-gateway action requires for "on"/"auto"/
+    "schedule" - required for those, ignored for "off" (never gated,
+    see `routers/v1/iot.py::send_actuator_command`)."""
+
+    command: str
+    scheduled_for: Optional[datetime] = None
+    confirmed: bool = False
+
+
+class ActuatorCommandOut(BaseModel):
+    id: str
+    twin_id: str
+    command: str
+    status: str
+    issued_by: Optional[str] = None
+    executed_at: Optional[datetime] = None
+    result: Optional[dict] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RuleCreate(BaseModel):
     twin_type_id: str
     metric: str

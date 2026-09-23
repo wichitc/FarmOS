@@ -6,10 +6,13 @@ from sqlalchemy.orm import Session
 
 from ...ai import agent_gateway
 from ...ai import copilot
+from ...ai import farm_score as ai_farm_score
 from ...ai import models as ai_models
 from ...ai import schemas as ai_schemas
+from ...ai.service import record_prediction
 from ...core.deps import assert_farm_scope, require_permission
 from ...database import get_db
+from ...farm import models as farm_models
 from ...foundation import models as fm
 from ...foundation import workflow_engine
 from ...foundation.audit import record_audit
@@ -430,3 +433,34 @@ def ask_copilot(
     )
     db.commit()
     return ai_schemas.CopilotAskResponse(conversation_id=conversation.id, answer=result.content, citations=result.citations)
+
+
+# ---------------------------------------------------------------------------
+# AI Farm Score (master prompt §26/§48)
+# ---------------------------------------------------------------------------
+
+@router.get("/farms/{farm_id}/score", response_model=ai_schemas.FarmScoreOut)
+def get_farm_score(
+    farm_id: str,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("dashboard.view")),
+):
+    """Reuses `dashboard.view` rather than a new permission - this is the
+    same class of read-only composite metric the Command Center (Phase
+    16) already gates behind it."""
+    farm = _get_or_404(db, farm_models.Farm, farm_id, "Farm")
+    assert_farm_scope(db, current_user, "dashboard.view", farm.id)
+
+    result = ai_farm_score.compute_farm_score(db, tenant_id=current_user.tenant_id, farm_id=farm.id)
+    record_prediction(
+        db, tenant_id=current_user.tenant_id, model_code="farm_ai_score_rule_engine",
+        entity_type="farm", entity_id=farm.id,
+        input_ref={"factors": [f.name for f in result.factors]},
+        output={"score": result.score, "band": result.band},
+        confidence=None, created_by=current_user.id,
+    )
+    db.commit()
+    return ai_schemas.FarmScoreOut(
+        farm_id=farm.id, score=result.score, band=result.band,
+        factors=[ai_schemas.ScoreFactorOut(**vars(f)) for f in result.factors],
+    )

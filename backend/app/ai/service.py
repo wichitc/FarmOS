@@ -19,6 +19,7 @@ BASELINE_MODELS: list[tuple[str, str, str, str, str]] = [
     ("disease_risk_rule_engine", "Crop Disease Risk (rule-based)", "disease_risk", "v1", "app.crophealth.risk.compute_disease_risk"),
     ("yield_estimation_rule_engine", "Yield Range Estimation (rule-based)", "yield_forecast", "v1", "app.harvest.estimation.estimate_yield_range"),
     ("irrigation_recommendation_rule_engine", "Irrigation Recommendation (rule-based)", "irrigation_demand", "v1", "app.irrigation.recommendation.recommend_irrigation"),
+    ("farm_ai_score_rule_engine", "AI Farm Score (rule-based composite)", "farm_score", "v1", "app.ai.farm_score.compute_farm_score"),
 ]
 
 # code, name, domain, description, allowed_action_types (master prompt

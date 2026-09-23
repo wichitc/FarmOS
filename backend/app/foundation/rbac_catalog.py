@@ -103,6 +103,8 @@ PERMISSIONS: list[tuple[str, str]] = [
     ("work.task.execute", "Accept/reject/start/complete work tasks assigned to you"),
     ("work.task.review", "Review a completed work task and close it or send it back"),
     ("reporting.view", "View and export operational/financial reports"),
+    ("knowledge.document.view", "View and search knowledge base documents"),
+    ("knowledge.document.manage", "Create/update/delete knowledge base documents"),
 ]
 
 SYSTEM_ROLES: list[tuple[str, str]] = [
@@ -205,6 +207,8 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "work.task.execute",
         "work.task.review",
         "reporting.view",
+        "knowledge.document.view",
+        "knowledge.document.manage",
     ],
     "farm_manager": [
         "master_data.crop.view",
@@ -293,6 +297,8 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "work.task.execute",
         "work.task.review",
         "reporting.view",
+        "knowledge.document.view",
+        "knowledge.document.manage",
     ],
     "agronomist": [
         "master_data.crop.view",
@@ -341,6 +347,8 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "work.task.manage",
         "work.task.execute",
         "reporting.view",
+        "knowledge.document.view",
+        "knowledge.document.manage",
     ],
     "field_worker": [
         "farm.view",
@@ -384,6 +392,7 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "work.task.view",
         "work.task.execute",
         "reporting.view",
+        "knowledge.document.view",
     ],
     "maintenance_engineer": [
         "twin.view",
@@ -414,6 +423,7 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "work.task.view",
         "work.task.execute",
         "reporting.view",
+        "knowledge.document.view",
     ],
     "warehouse_officer": [
         "inventory.item.view",
@@ -438,6 +448,7 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "dashboard.view",
         "work.task.view",
         "reporting.view",
+        "knowledge.document.view",
     ],
     "finance": [
         "workflow.instance.approve",
@@ -463,8 +474,9 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "dashboard.view",
         "work.task.view",
         "reporting.view",
+        "knowledge.document.view",
     ],
-    "auditor": ["platform.audit.view", "notification.view", "ai.model.view", "ai.prediction.view", "dashboard.view", "work.task.view", "reporting.view"],
+    "auditor": ["platform.audit.view", "notification.view", "ai.model.view", "ai.prediction.view", "dashboard.view", "work.task.view", "reporting.view", "knowledge.document.view"],
     "viewer": [
         "master_data.crop.view",
         "farm.view",
@@ -506,5 +518,6 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, list[str]] = {
         "ai.copilot.use",
         "dashboard.view",
         "work.task.view",
+        "knowledge.document.view",
     ],
 }

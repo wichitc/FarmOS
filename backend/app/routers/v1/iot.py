@@ -2,10 +2,11 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...ai import agent_gateway
 from ...core.deps import assert_farm_scope, require_permission
 from ...core.security import hash_password
 from ...database import get_db
@@ -17,6 +18,7 @@ from ...iot import schemas as iot_schemas
 from ...twins import models as twin_models
 from ...twins.service import create_twin
 
+
 router = APIRouter(prefix="/api/v1/iot", tags=["iot"])
 
 
@@ -25,6 +27,10 @@ def _get_or_404(db: Session, model, obj_id: str, label: str):
     if obj is None:
         raise HTTPException(status_code=404, detail=f"{label} not found")
     return obj
+
+
+def _correlation_id(request: Request) -> str:
+    return request.headers.get("x-correlation-id", "")
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +208,61 @@ def reactivate_device(
     )
     db.commit()
     return device
+
+
+# ---------------------------------------------------------------------------
+# Actuator commands (master prompt §25, Phase 26 follow-on): pump/valve/
+# fan/fertilizer-pump ON/OFF/AUTO/SCHEDULE, with full user/timestamp/
+# device/action/result/audit-log records. Not a new command/audit
+# mechanism - every command routes through the same Agent Action Gateway
+# (Phase 15) irrigation's ai_recommended plans do (Phase 24): "on"/
+# "auto"/"schedule" are the L3-floor `actuator_start` action_type (capped
+# at L2 without an active policy grant, so a start command executes only
+# alongside `confirmed: true` in the same request); "off" is deliberately
+# NOT in that floor - an e-stop must never be gated behind a confirmation
+# step, so it always executes immediately (L1).
+# ---------------------------------------------------------------------------
+
+@router.post("/devices/{device_id}/commands", response_model=iot_schemas.ActuatorCommandOut, status_code=201)
+def send_actuator_command(
+    device_id: str,
+    payload: iot_schemas.ActuatorCommandRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("iot.device.manage")),
+):
+    device = _get_or_404(db, iot_models.IotDevice, device_id, "Device")
+    assert_farm_scope(db, current_user, "iot.device.manage", device.farm_id)
+    if payload.command not in iot_schemas.ACTUATOR_COMMANDS:
+        raise HTTPException(status_code=422, detail=f"Unknown command '{payload.command}'")
+    if not device.is_active:
+        raise HTTPException(status_code=409, detail="Cannot command a deactivated device")
+
+    is_stop = payload.command == "off"
+    action = agent_gateway.propose_action(
+        db, tenant_id=current_user.tenant_id, actor=current_user,
+        agent_code="system", action_type="actuator_stop" if is_stop else "actuator_start",
+        requested_level="L1" if is_stop else "L2",
+        entity_type="iot_device", entity_id=device.id, farm_id=device.farm_id,
+        rationale=f"Manual '{payload.command}' command issued by {current_user.full_name}.",
+        input_context={"command": payload.command, "scheduled_for": payload.scheduled_for.isoformat() if payload.scheduled_for else None},
+        correlation_id=_correlation_id(request),
+    )
+    agent_gateway.execute_action(
+        db, action=action, actor=current_user, confirmed=payload.confirmed,
+        result={"command": payload.command, "device_id": device.id},
+        correlation_id=_correlation_id(request),
+    )
+
+    twin = db.get(twin_models.DigitalTwin, device.digital_twin_id)
+    if twin is not None:
+        twin.current_state = {**twin.current_state, "actuator_status": payload.command, "last_command_at": datetime.now(timezone.utc).isoformat()}
+    db.commit()
+
+    return iot_schemas.ActuatorCommandOut(
+        id=action.id, twin_id=device.digital_twin_id, command=payload.command,
+        status=action.status, issued_by=current_user.id, executed_at=action.executed_at, result=action.result,
+    )
 
 
 # ---------------------------------------------------------------------------

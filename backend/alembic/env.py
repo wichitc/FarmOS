@@ -23,6 +23,7 @@ from app.ai import models as ai_models  # noqa: F401
 from app.work import models as work_models  # noqa: F401
 from app.crm import models as crm_models  # noqa: F401
 from app.subscription import models as subscription_models  # noqa: F401
+from app.knowledge import models as knowledge_models  # noqa: F401
 from app import models as legacy_models  # noqa: F401
 
 config = context.config

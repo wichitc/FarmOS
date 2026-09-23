@@ -28,7 +28,9 @@ from .routers.v1 import harvest as harvest_router_v1
 from .routers.v1 import inventory as inventory_router_v1
 from .routers.v1 import iot as iot_router_v1
 from .routers.v1 import irrigation as irrigation_router_v1
+from .routers.v1 import knowledge as knowledge_router_v1
 from .routers.v1 import master_data as master_data_router_v1
+from .routers.v1 import ml as ml_router_v1
 from .routers.v1 import notifications as notifications_router_v1
 from .routers.v1 import reporting as reporting_router_v1
 from .routers.v1 import roles as roles_router_v1
@@ -176,6 +178,8 @@ app.include_router(work_router_v1.router)
 app.include_router(reporting_router_v1.router)
 app.include_router(crm_router_v1.router)
 app.include_router(subscription_router_v1.router)
+app.include_router(knowledge_router_v1.router)
+app.include_router(ml_router_v1.router)
 
 
 @app.get("/api/status")

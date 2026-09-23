@@ -272,3 +272,101 @@ def test_agent_actions_listed_by_registered_agent(client, tenant):
     res = client.get("/api/v1/ai/agents/crop/actions", headers=headers)
     assert res.status_code == 200, res.text
     assert action["id"] in [a["id"] for a in res.json()]
+
+
+def _create_farm_for_score(client, headers, code="SCOREFARM"):
+    res = client.post("/api/v1/farm/farms", json={"code": code, "name": "Score Farm"}, headers=headers)
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_farm_score_with_no_data_defaults_to_good(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm_for_score(client, headers, code="SCOREFARM1")
+
+    res = client.get(f"/api/v1/ai/farms/{farm['id']}/score", headers=headers)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["score"] == 100
+    assert body["band"] == "good"
+    assert len(body["factors"]) == 4
+    assert all(f["has_data"] is False for f in body["factors"])
+
+
+def test_farm_score_drops_with_open_disease_incident(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm_for_score(client, headers, code="SCOREFARM2")
+    disease = client.post(
+        "/api/v1/crop-health/diseases",
+        json={"code": f"blight-{tenant.tenant_slug}", "name_en": "Blight", "name_th": "โรคใบไหม้", "pathogen_type": "fungal"},
+        headers=headers,
+    ).json()
+    client.post(f"/api/v1/crop-health/farms/{farm['id']}/incidents", json={"disease_id": disease["id"]}, headers=headers)
+
+    res = client.get(f"/api/v1/ai/farms/{farm['id']}/score", headers=headers)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    disease_factor = next(f for f in body["factors"] if f["name"] == "disease_risk")
+    assert disease_factor["has_data"] is True
+    assert disease_factor["score"] < 100
+    assert body["score"] < 100
+    # Worst-first ordering: disease_risk should not be last since it now has a real deduction.
+    assert body["factors"][0]["name"] == "disease_risk"
+
+
+def test_farm_score_reflects_critical_equipment(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm_for_score(client, headers, code="SCOREFARM3")
+    twin_type = client.post(
+        "/api/v1/twins/types", json={"code": f"score-pump-{tenant.tenant_slug}", "name": "Pump", "category": "asset"}, headers=headers
+    ).json()
+    asset = client.post(
+        "/api/v1/assets",
+        json={"twin_type_id": twin_type["id"], "display_code": "SCORE-PUMP-1", "farm_id": farm["id"], "initial_state": {"temperature_c": 95, "vibration_mm_s": 5.0, "status": "running"}},
+        headers=headers,
+    ).json()
+    client.post(f"/api/v1/assets/{asset['id']}/assessments", headers=headers)
+
+    res = client.get(f"/api/v1/ai/farms/{farm['id']}/score", headers=headers)
+    assert res.status_code == 200, res.text
+    equipment_factor = next(f for f in res.json()["factors"] if f["name"] == "equipment_health")
+    assert equipment_factor["has_data"] is True
+    assert equipment_factor["score"] < 100
+
+
+def test_farm_score_records_a_prediction(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm_for_score(client, headers, code="SCOREFARM4")
+    client.get(f"/api/v1/ai/farms/{farm['id']}/score", headers=headers)
+
+    predictions_res = client.get("/api/v1/ai/predictions", params={"entity_type": "farm", "entity_id": farm["id"]}, headers=headers)
+    assert predictions_res.status_code == 200
+    assert len(predictions_res.json()) == 1
+    assert predictions_res.json()[0]["output"]["band"] == "good"
+
+
+def test_farm_score_farm_scoped_abac(client, tenant):
+    admin_headers = tenant.auth_headers(client)
+    farm_a = client.post("/api/v1/farm/farms", json={"code": "SCOREA", "name": "Score Farm A"}, headers=admin_headers).json()
+    farm_b = client.post("/api/v1/farm/farms", json={"code": "SCOREB", "name": "Score Farm B"}, headers=admin_headers).json()
+
+    email = f"scoremgr-{unique_slug('u')}@example.com"
+    password = "pw-for-testing-123"
+    user = client.post(
+        "/api/v1/users", json={"email": email, "password": password, "full_name": "Score Manager"}, headers=admin_headers
+    ).json()
+    roles = {r["code"]: r["id"] for r in client.get("/api/v1/roles", headers=admin_headers).json()}
+    client.post(
+        "/api/v1/role-assignments",
+        json={"user_id": user["id"], "role_id": roles["farm_manager"], "scope_type": "farm", "scope_id": farm_a["id"]},
+        headers=admin_headers,
+    )
+
+    login_res = client.post("/api/v1/auth/login", json={"tenant_slug": tenant.tenant_slug, "email": email, "password": password})
+    manager_headers = {"Authorization": f"Bearer {login_res.json()['access_token']}"}
+
+    ok_res = client.get(f"/api/v1/ai/farms/{farm_a['id']}/score", headers=manager_headers)
+    assert ok_res.status_code == 200
+
+    denied_res = client.get(f"/api/v1/ai/farms/{farm_b['id']}/score", headers=manager_headers)
+    assert denied_res.status_code == 403
