@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
+from app.ai import models as ai_models
 from app.core.deps import set_tenant_context
 from app.iot import models as iot_models
 from app.iot.ingestion import check_offline_devices, process_reading
+from app.iot.scheduling import fire_scheduled_commands
 from app.twins import models as twin_models
 
 from .conftest import unique_slug
@@ -321,16 +323,102 @@ def test_actuator_command_validation_and_deactivated_device(client, tenant):
     assert deactivated_res.status_code == 409
 
 
-def test_actuator_auto_and_schedule_commands_also_require_confirmation(client, tenant):
+def test_actuator_auto_command_requires_confirmation(client, tenant):
     headers = tenant.auth_headers(client)
     farm = _create_farm(client, headers, code="IOTFARM13")
     twin_type = _create_twin_type(client, headers, code="pump13")
     device = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-actuator-auto")
 
-    for command in ("auto", "schedule"):
-        denied_res = client.post(f"/api/v1/iot/devices/{device['id']}/commands", json={"command": command}, headers=headers)
-        assert denied_res.status_code == 409
-        ok_res = client.post(
-            f"/api/v1/iot/devices/{device['id']}/commands", json={"command": command, "confirmed": True}, headers=headers
-        )
-        assert ok_res.status_code == 201, ok_res.text
+    denied_res = client.post(f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "auto"}, headers=headers)
+    assert denied_res.status_code == 409
+    ok_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "auto", "confirmed": True}, headers=headers
+    )
+    assert ok_res.status_code == 201, ok_res.text
+    assert ok_res.json()["status"] == "executed"
+
+
+def test_schedule_command_requires_scheduled_for_and_confirmation_but_does_not_execute_yet(client, tenant):
+    """Master-prompt integration, Phase 35: a 'schedule' command still
+    requires the same-request confirmation every other actuator-start
+    command does, but - unlike 'on'/'auto' - it stays 'proposed' rather
+    than executing immediately; `fire_scheduled_commands` is what
+    actually executes it once scheduled_for arrives."""
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="IOTFARM14")
+    twin_type = _create_twin_type(client, headers, code="pump14")
+    device = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-actuator-schedule")
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+    missing_scheduled_for_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "schedule", "confirmed": True}, headers=headers
+    )
+    assert missing_scheduled_for_res.status_code == 422
+
+    denied_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "schedule", "scheduled_for": future}, headers=headers
+    )
+    assert denied_res.status_code == 409
+
+    ok_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands",
+        json={"command": "schedule", "scheduled_for": future, "confirmed": True},
+        headers=headers,
+    )
+    assert ok_res.status_code == 201, ok_res.text
+    body = ok_res.json()
+    assert body["status"] == "proposed"
+    assert body["executed_at"] is None
+
+    twin_res = client.get(f"/api/v1/twins/{device['digital_twin_id']}", headers=headers)
+    assert "actuator_status" not in twin_res.json()["current_state"]
+
+
+def test_fire_scheduled_commands_executes_due_actions_and_updates_twin(client, tenant, raw_db):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="IOTFARM15")
+    twin_type = _create_twin_type(client, headers, code="pump15")
+    device = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-actuator-fire")
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+
+    due_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands",
+        json={"command": "schedule", "scheduled_for": past, "confirmed": True},
+        headers=headers,
+    )
+    assert due_res.status_code == 201, due_res.text
+    due_action_id = due_res.json()["id"]
+
+    not_due_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands",
+        json={"command": "schedule", "scheduled_for": future, "confirmed": True},
+        headers=headers,
+    )
+    assert not_due_res.status_code == 201, not_due_res.text
+    not_due_action_id = not_due_res.json()["id"]
+
+    set_tenant_context(raw_db, tenant.tenant_id)
+    fired = fire_scheduled_commands(raw_db, tenant.tenant_id)
+    fired_ids = [a.id for a in fired]
+    assert due_action_id in fired_ids
+    assert not_due_action_id not in fired_ids
+
+    # `fire_scheduled_commands` commits internally, which resets
+    # `set_tenant_context`'s transaction-scoped setting - re-set it
+    # before further RLS-protected reads on this session.
+    set_tenant_context(raw_db, tenant.tenant_id)
+    due_action = raw_db.get(ai_models.AgentAction, due_action_id)
+    assert due_action.status == "executed"
+    not_due_action = raw_db.get(ai_models.AgentAction, not_due_action_id)
+    assert not_due_action.status == "proposed"
+
+    twin_res = client.get(f"/api/v1/twins/{device['digital_twin_id']}", headers=headers)
+    assert twin_res.json()["current_state"]["actuator_status"] == "schedule"
+
+    # Idempotent: a second sweep doesn't re-fire the already-executed action.
+    set_tenant_context(raw_db, tenant.tenant_id)
+    second_sweep = fire_scheduled_commands(raw_db, tenant.tenant_id)
+    assert due_action_id not in [a.id for a in second_sweep]

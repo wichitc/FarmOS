@@ -6,8 +6,10 @@ Subscribes to `tenants/+/devices/+/telemetry`. Expected JSON payload:
 `recorded_at` is optional (defaults to receipt time).
 
 Runs as the `iot-ingestion` docker-compose service. Also periodically scans
-every tenant for devices that have gone quiet (FR-IOT-004) - offline
-detection isn't a separate service, just another thing this loop does.
+every tenant for devices that have gone quiet (FR-IOT-004), and for any
+actuator SCHEDULE commands whose time has arrived (master-prompt
+integration, Phase 35, §25) - neither is a separate service, just more
+things this loop does.
 
 Usage: python -m app.scripts.mqtt_ingestion_worker
 """
@@ -19,6 +21,7 @@ from datetime import datetime
 
 import paho.mqtt.client as mqtt
 
+from ..ai import models as ai_models  # noqa: F401 - registers table in metadata
 from ..config import settings
 from ..core.deps import set_tenant_context
 from ..database import SessionLocal
@@ -26,6 +29,7 @@ from ..farm import models as farm_models  # noqa: F401 - registers FK targets (f
 from ..foundation import models as fm
 from ..iot import models as iot_models
 from ..iot.ingestion import check_offline_devices, process_reading
+from ..iot.scheduling import fire_scheduled_commands
 from ..twins import models as twin_models  # noqa: F401 - registers FK targets (digital_twins) in metadata
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -118,10 +122,20 @@ def _offline_check_loop() -> None:
         db = SessionLocal()
         try:
             for tenant in db.query(fm.Tenant).all():
+                # Re-set before *each* call, not once per tenant: both
+                # `check_offline_devices` and `fire_scheduled_commands`
+                # commit internally, and `set_tenant_context` uses
+                # `set_config(..., is_local=true)` - transaction-scoped,
+                # same as `SET LOCAL` - so a commit silently resets it
+                # for whatever runs next in this same iteration.
                 set_tenant_context(db, tenant.id)
                 alerts = check_offline_devices(db, tenant.id, settings.iot_offline_timeout_seconds)
                 if alerts:
                     log.info("tenant '%s': %d device(s) marked offline", tenant.slug, len(alerts))
+                set_tenant_context(db, tenant.id)
+                fired = fire_scheduled_commands(db, tenant.id)
+                if fired:
+                    log.info("tenant '%s': %d scheduled actuator command(s) fired", tenant.slug, len(fired))
         except Exception:
             log.exception("error in offline-check loop")
         finally:

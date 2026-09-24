@@ -245,6 +245,10 @@ def send_actuator_command(
         raise HTTPException(status_code=409, detail="Cannot command a deactivated device")
 
     is_stop = payload.command == "off"
+    is_schedule = payload.command == "schedule"
+    if is_schedule and payload.scheduled_for is None:
+        raise HTTPException(status_code=422, detail="'schedule' command requires scheduled_for")
+
     action = agent_gateway.propose_action(
         db, tenant_id=current_user.tenant_id, actor=current_user,
         agent_code="system", action_type="actuator_stop" if is_stop else "actuator_start",
@@ -254,15 +258,30 @@ def send_actuator_command(
         input_context={"command": payload.command, "scheduled_for": payload.scheduled_for.isoformat() if payload.scheduled_for else None},
         correlation_id=_correlation_id(request),
     )
-    agent_gateway.execute_action(
-        db, action=action, actor=current_user, confirmed=payload.confirmed,
-        result={"command": payload.command, "device_id": device.id},
-        correlation_id=_correlation_id(request),
-    )
 
-    twin = db.get(twin_models.DigitalTwin, device.digital_twin_id)
-    if twin is not None:
-        twin.current_state = {**twin.current_state, "actuator_status": payload.command, "last_command_at": datetime.now(timezone.utc).isoformat()}
+    if is_schedule:
+        # Master-prompt integration, Phase 35 (§25's SCHEDULE execution
+        # engine, flagged as unbuilt in Phase 26's own checklist -
+        # `scheduled_for` was accepted and stored but nothing watched for
+        # it). Confirmation is still required in *this* request (same L2
+        # contract every other actuator-start command has), but the
+        # action deliberately stays "proposed" rather than executing now
+        # - `iot/scheduling.py::fire_scheduled_commands` (run from the
+        # same periodic loop that already checks offline devices) is what
+        # actually executes it and updates the twin, once `scheduled_for`
+        # arrives.
+        if not payload.confirmed:
+            raise HTTPException(status_code=409, detail="A 'schedule' command requires an explicit human confirmation before it can be scheduled")
+    else:
+        agent_gateway.execute_action(
+            db, action=action, actor=current_user, confirmed=payload.confirmed,
+            result={"command": payload.command, "device_id": device.id},
+            correlation_id=_correlation_id(request),
+        )
+        twin = db.get(twin_models.DigitalTwin, device.digital_twin_id)
+        if twin is not None:
+            twin.current_state = {**twin.current_state, "actuator_status": payload.command, "last_command_at": datetime.now(timezone.utc).isoformat()}
+
     db.commit()
 
     return iot_schemas.ActuatorCommandOut(
