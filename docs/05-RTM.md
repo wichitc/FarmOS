@@ -689,3 +689,33 @@ Phase 24's own deferral, restated verbatim there: "wiring each one is the same s
 - **Eight of eleven agents remain unwired to a real domain action** (Weather, Soil, Pest, Yield, Finance, Sustainability, plus Crop and Farm Manager's orchestration role) - each one is the same shape of change made here, just not done six more times in this pass
 - **`treatment_recommendation`** (the Disease Agent's other cataloged action type) **is still unwired** - `TreatmentPlan` has no `source`/AI-origin signal the way `IrrigationPlan`/`FertigationPlan` do or `DiseaseIncident`'s `source_detection_id` does, so there is no clean trigger to key off yet without adding a new field; deferred rather than fabricating one
 - **No Farm Manager orchestration/synthesis logic** - unchanged from Phase 24's own deferral; `farm_manager` stays a cataloged placeholder
+
+## Master-prompt integration, Phase 31: Yield Agent wired to a real domain action
+
+Third agent wiring in this series (after Irrigation in Phase 24, Fertilizer and Disease in Phase 30), picking up the Yield Agent's cataloged `yield_forecast` action type.
+
+- [x] **Yield Agent -> `yield_forecast`** (`routers/v1/harvest.py::create_yield_forecast`): a structurally different wiring from the previous three, deliberately so - `IrrigationPlan`/`FertigationPlan` have a `source` field and `DiseaseIncident` has `source_detection_id`, giving each a real "was this AI-originated" signal to gate on. A `YieldForecast` has neither, because there is no "manual yield forecast" concept - every call to this endpoint already *is* `estimate_yield_range` (the rule-based engine) running. So the L1 `AgentAction` is recorded **unconditionally** on every forecast, the same "always record" shape Phase 27 used for Farm Score's `Prediction`, not the conditional shape the other three agents use
+- [x] Automated tests: `test_harvest.py::test_yield_forecast_records_an_agent_action` - every forecast gets exactly one executed L1 action from the Yield Agent, with the real estimated range in its result
+- [x] Verified live: full regression suite, zero regressions
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **Seven of eleven agents remain unwired** (Weather, Soil, Pest, Crop, Finance, Sustainability, plus Farm Manager's orchestration role) - Weather is the most promising next candidate (a `weather_risk_alert` action keyed off the same warning/anomaly bands `ai/farm_score.py`'s weather factor already classifies against) but wiring it cleanly would mean exposing that currently-private banding logic for the weather module to reuse, which is more than this pass's scope - flagged rather than duplicating the thresholds ad hoc
+- **`treatment_recommendation` still unwired** - unchanged from Phase 30's deferral
+- **No Farm Manager orchestration/synthesis logic** - unchanged from Phase 24's own deferral
+
+## Master-prompt integration, Phase 32: Weather Agent wired to a real domain action
+
+Fourth agent wiring in this series, picking up Phase 31's own deferral note: the Weather Agent's `weather_risk_alert` action, keyed off the same warning/anomaly bands `ai/farm_score.py`'s weather factor already classifies weather readings against.
+
+- [x] **`weather/risk.py`** (new): `WEATHER_RISK_RANGES` + `classify_weather_risk(metric, value)` extracted out of `ai/farm_score.py`'s private `_WEATHER_RISK_RANGES` - the single source of truth for "what counts as risky weather" now genuinely lives in one place instead of being duplicated, resolving the deferral flagged at the end of Phase 31 rather than letting a second consumer copy the thresholds ad hoc. `farm_score.py`'s `_weather_factor` now imports and calls it; its own behavior and tests are unchanged (verified - all pre-existing farm-score tests still pass)
+- [x] **Weather Agent -> `weather_risk_alert`** (`routers/v1/weather.py::ingest_reading`): every ingested reading is classified; only one landing in the `warning`/`anomaly` band gets a real, immediately-closed L1 `AgentAction` - a normal reading gets none, unlike Phase 31's Yield wiring (unconditional) and closer in shape to Phase 30's Fertilizer/Disease wirings (conditional), just gated on a computed classification rather than a stored field
+- [x] Automated tests: `test_irrigation.py::test_weather_reading_in_risk_band_records_an_agent_action` (a normal 30°C reading gets no action, a 38°C reading gets exactly one executed L1 action with `band: "warning"`); full `test_ai.py` farm-score suite re-run to confirm the extraction didn't change scoring behavior
+- [x] Verified live: full regression suite, zero regressions
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **Six of eleven agents remain unwired** (Soil, Pest, Crop, Finance, Sustainability, plus Farm Manager's orchestration role) - Soil and Pest both still lack a dedicated scoring engine to wire to (same gap Phase 27 already declined to fake a number for); Finance's `financial_posting` action type is hardcoded at the L3 floor (`ACTION_LEVEL_FLOORS`), so wiring it meaningfully means touching the accounting/ledger posting flow, a larger change than this pass's scope
+- **No alert deduplication** - a farm sitting in the warning band across many consecutive readings gets one `AgentAction` per reading, not a single ongoing alert; this mirrors how `Alert` records already work elsewhere in this platform (Phase 7), not a new gap introduced here
+- **`treatment_recommendation` still unwired** - unchanged from Phase 30's deferral
+- **No Farm Manager orchestration/synthesis logic** - unchanged from Phase 24's own deferral

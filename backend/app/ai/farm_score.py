@@ -27,6 +27,7 @@ from ..crophealth import models as crophealth_models
 from ..dashboard.aggregation import equipment_health_widget
 from ..iot import models as iot_models
 from ..weather.provider import current_reading
+from ..weather.risk import WEATHER_RISK_RANGES, classify_weather_risk
 
 # Weights sum to 100 - each factor contributes its 0-100 sub-score
 # proportionally. A factor with no data defaults to 100 (benefit of the
@@ -36,17 +37,6 @@ FACTOR_WEIGHTS = {"equipment_health": 0.30, "disease_risk": 0.30, "weather": 0.2
 
 # Master prompt §26's own bands.
 BAND_THRESHOLDS = (("good", 80), ("warning", 60), ("risk", 40), ("critical", 0))
-
-_WEATHER_RISK_RANGES = {
-    # Same normal/warning/anomaly bands `sensor_simulator.py` (Phase 23)
-    # already uses, reused here so "what counts as risky weather" is
-    # defined in exactly one place... except the simulator generates
-    # values, this reads them, so duplicating the band boundaries here
-    # (not importing the simulator, which is scripts/ not app/) is the
-    # simplest honest option - see the RTM deferral note.
-    "temperature_c": {"warning": (36, 40), "anomaly": (41, 200)},
-    "humidity_pct": {"warning": (85, 95), "anomaly": (96, 100)},
-}
 
 
 @dataclass
@@ -103,19 +93,17 @@ def _disease_risk_factor(db: Session, tenant_id: str, farm_id: str) -> ScoreFact
 
 
 def _weather_factor(db: Session, farm_id: str) -> ScoreFactor:
-    readings = {metric: current_reading(db, farm_id=farm_id, metric=metric) for metric in _WEATHER_RISK_RANGES}
+    readings = {metric: current_reading(db, farm_id=farm_id, metric=metric) for metric in WEATHER_RISK_RANGES}
     present = {metric: r for metric, r in readings.items() if r is not None}
     if not present:
         return ScoreFactor("weather", 100.0, FACTOR_WEIGHTS["weather"], "No recent weather readings.", has_data=False)
 
     deductions = []
     for metric, reading in present.items():
-        ranges = _WEATHER_RISK_RANGES[metric]
-        anomaly_low, anomaly_high = ranges["anomaly"]
-        warning_low, warning_high = ranges["warning"]
-        if anomaly_low <= reading.value <= anomaly_high:
+        band = classify_weather_risk(metric, reading.value)
+        if band == "anomaly":
             deductions.append((metric, reading.value, 40))
-        elif warning_low <= reading.value <= warning_high:
+        elif band == "warning":
             deductions.append((metric, reading.value, 20))
 
     score = max(0.0, 100.0 - sum(d for _, _, d in deductions))

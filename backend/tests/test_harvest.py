@@ -62,6 +62,33 @@ def test_yield_forecast_is_always_a_range(client, tenant):
     assert len(list_res.json()) == 1
 
 
+def test_yield_forecast_records_an_agent_action(client, tenant):
+    """Master-prompt integration, Phase 31: unlike Irrigation/Fertilizer/
+    Disease (conditional on a source/detection field), every yield
+    forecast is inherently the rule-based engine running - there's no
+    "manual forecast" concept - so the Yield Agent's L1 AgentAction is
+    recorded unconditionally, same shape as Phase 27's Farm Score
+    Prediction."""
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="HFARM_AI")
+
+    forecast = client.post(
+        f"/api/v1/harvest/farms/{farm['id']}/yield-forecasts",
+        json={"tree_count": 5, "avg_fruit_count_per_tree": 15, "avg_fruit_weight_kg": 2.5},
+        headers=headers,
+    ).json()
+
+    actions_res = client.get("/api/v1/ai/agents/yield/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    matching = [a for a in actions_res.json() if a["entity_id"] == forecast["id"]]
+    assert len(matching) == 1
+    action = matching[0]
+    assert action["level"] == "L1"
+    assert action["status"] == "executed"
+    assert action["action_type"] == "yield_forecast"
+    assert action["result"]["yield_forecast_id"] == forecast["id"]
+
+
 def test_harvest_and_packing_lot_traceability(client, tenant):
     headers = tenant.auth_headers(client)
     farm, _zone, plot, _block, row = _build_hierarchy(client, headers, farm_code="HFARM3")

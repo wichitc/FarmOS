@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from ...ai import agent_gateway
 from ...core.deps import assert_farm_scope, require_permission
 from ...database import get_db
 from ...farm import models as farm_models
@@ -11,6 +12,7 @@ from ...foundation import models as fm
 from ...weather import models as weather_models
 from ...weather import schemas as weather_schemas
 from ...weather.provider import current_reading
+from ...weather.risk import classify_weather_risk
 
 router = APIRouter(prefix="/api/v1/weather", tags=["weather"])
 
@@ -22,9 +24,14 @@ def _get_or_404(db: Session, model, obj_id: str, label: str):
     return obj
 
 
+def _correlation_id(request: Request) -> str:
+    return request.headers.get("x-correlation-id", "")
+
+
 @router.post("/readings", response_model=weather_schemas.WeatherReadingOut, status_code=201)
 def ingest_reading(
     payload: weather_schemas.WeatherReadingCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("weather.ingest")),
 ):
@@ -45,6 +52,34 @@ def ingest_reading(
         updated_by=current_user.id,
     )
     db.add(reading)
+    db.flush()
+
+    band = classify_weather_risk(payload.metric, payload.value)
+    if band is not None:
+        # Weather Agent's Observe->Analyze record (master-prompt
+        # integration, Phase 32 - same shape as the Irrigation/
+        # Fertilizer/Disease/Yield wirings). Keyed off the same
+        # warning/anomaly bands `ai/farm_score.py`'s weather factor
+        # already classifies against (now shared via `weather/risk.py`
+        # rather than duplicated) - only a reading actually landing in
+        # one of those bands generates an alert, not every reading. L1
+        # ("advisory") since flagging risky weather isn't itself a risky
+        # action; any resulting irrigation/treatment decision stays a
+        # separate, unrelated plan a human or another agent creates.
+        agent_action = agent_gateway.propose_action(
+            db, tenant_id=current_user.tenant_id, actor=current_user,
+            agent_code="weather", action_type="weather_risk_alert", requested_level="L1",
+            entity_type="weather_reading", entity_id=reading.id, farm_id=farm.id,
+            rationale=f"{payload.metric}={payload.value} is in the {band} range.",
+            input_context={"metric": payload.metric, "value": payload.value, "band": band},
+            correlation_id=_correlation_id(request),
+        )
+        agent_gateway.execute_action(
+            db, action=agent_action, actor=current_user,
+            result={"weather_reading_id": reading.id, "band": band},
+            correlation_id=_correlation_id(request),
+        )
+
     db.commit()
     return reading
 

@@ -1,10 +1,11 @@
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ...ai import agent_gateway
 from ...ai.service import record_prediction
 from ...core.deps import assert_farm_scope, require_permission, set_tenant_context
 from ...database import get_db
@@ -27,6 +28,10 @@ def _get_or_404(db: Session, model, obj_id: str, label: str):
 
 def _new_qr_code() -> str:
     return secrets.token_urlsafe(16)
+
+
+def _correlation_id(request: Request) -> str:
+    return request.headers.get("x-correlation-id", "")
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +106,7 @@ def list_tree_observations(
 def create_yield_forecast(
     farm_id: str,
     payload: harvest_schemas.YieldEstimateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("harvest.yield.manage")),
 ):
@@ -166,6 +172,37 @@ def create_yield_forecast(
         confidence=estimate.confidence,
         created_by=current_user.id,
     )
+
+    # Yield Agent's Observe->Analyze->Recommend record (master-prompt
+    # integration, Phase 31 - same shape as Irrigation/Fertilizer/Disease,
+    # but unconditional rather than gated by a `source`/detection field:
+    # unlike a plan, there is no "manual yield forecast" concept - every
+    # call to this endpoint already *is* the rule-based engine running,
+    # the same "always record" shape Phase 27 used for Farm Score's
+    # Prediction. L1 ("advisory") since a forecast recommends nothing
+    # risky by itself.
+    agent_action = agent_gateway.propose_action(
+        db, tenant_id=current_user.tenant_id, actor=current_user,
+        agent_code="yield", action_type="yield_forecast", requested_level="L1",
+        entity_type="yield_forecast", entity_id=forecast.id, farm_id=farm.id,
+        rationale="Rule-based yield range estimate.",
+        input_context={
+            "plot_id": payload.plot_id,
+            "tree_count": payload.tree_count,
+            "avg_fruit_count_per_tree": payload.avg_fruit_count_per_tree,
+        },
+        correlation_id=_correlation_id(request),
+    )
+    agent_gateway.execute_action(
+        db, action=agent_action, actor=current_user,
+        result={
+            "yield_forecast_id": forecast.id,
+            "estimated_yield_kg_low": estimate.estimated_yield_kg_low,
+            "estimated_yield_kg_high": estimate.estimated_yield_kg_high,
+        },
+        correlation_id=_correlation_id(request),
+    )
+
     db.commit()
     return forecast
 

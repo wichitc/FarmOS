@@ -194,6 +194,44 @@ def test_weather_station_preferred_over_forecast(client, tenant):
     assert len(list_res.json()) == 2
 
 
+def test_weather_reading_in_risk_band_records_an_agent_action(client, tenant):
+    """Master-prompt integration, Phase 32: a reading landing in the
+    warning/anomaly bands (shared with ai/farm_score.py's weather factor
+    via weather/risk.py) gets a real L1 AgentAction from the Weather
+    Agent; a normal reading gets none."""
+    headers = tenant.auth_headers(client)
+    farm = client.post("/api/v1/farm/farms", json={"code": "WXFARM2", "name": "Weather Risk Farm"}, headers=headers).json()
+
+    normal_res = client.post(
+        "/api/v1/weather/readings",
+        json={"farm_id": farm["id"], "metric": "temperature_c", "value": 30.0, "source": "station"},
+        headers=headers,
+    )
+    assert normal_res.status_code == 201, normal_res.text
+    normal_reading_id = normal_res.json()["id"]
+
+    hot_res = client.post(
+        "/api/v1/weather/readings",
+        json={"farm_id": farm["id"], "metric": "temperature_c", "value": 38.0, "source": "station"},
+        headers=headers,
+    )
+    assert hot_res.status_code == 201, hot_res.text
+    hot_reading_id = hot_res.json()["id"]
+
+    actions_res = client.get("/api/v1/ai/agents/weather/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    entity_ids = [a["entity_id"] for a in actions_res.json()]
+    assert normal_reading_id not in entity_ids
+
+    matching = [a for a in actions_res.json() if a["entity_id"] == hot_reading_id]
+    assert len(matching) == 1
+    action = matching[0]
+    assert action["level"] == "L1"
+    assert action["status"] == "executed"
+    assert action["action_type"] == "weather_risk_alert"
+    assert action["result"]["band"] == "warning"
+
+
 def test_irrigation_plan_farm_scoped_abac(client, tenant):
     admin_headers = tenant.auth_headers(client)
     farm_a = client.post("/api/v1/farm/farms", json={"code": "IRRA", "name": "Irr Farm A"}, headers=admin_headers).json()
