@@ -147,3 +147,19 @@ class FarmScoreOut(BaseModel):
     score: int
     band: str
     factors: list[ScoreFactorOut]
+
+
+class RecentAgentActionOut(BaseModel):
+    agent_code: str
+    action_type: str
+    status: str
+    rationale: str
+    created_at: datetime
+
+
+class FarmManagerBriefingOut(BaseModel):
+    farm_id: str
+    farm_score: FarmScoreOut
+    recent_agent_actions: list[RecentAgentActionOut]
+    open_alert_count: int
+    priorities: list[str]

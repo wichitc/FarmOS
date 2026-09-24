@@ -24,12 +24,14 @@ BASELINE_MODELS: list[tuple[str, str, str, str, str]] = [
 
 # code, name, domain, description, allowed_action_types (master prompt
 # §28's eleven named agents). "farm_manager" is the orchestrator at the
-# root of that diagram - it proposes nothing directly itself yet (no
-# cross-domain synthesis engine exists to drive it), so its allowed list
-# is empty; it exists in the catalog as a documented placeholder for that
-# future role rather than a callable agent today.
+# root of that diagram - Phase 40 gave it one real action,
+# `cross_domain_briefing` (`ai/farm_manager.py::compile_briefing`):
+# synthesizing the farm score, recent domain-agent activity, and open
+# alerts into one prioritized view. It still doesn't execute anything or
+# override a domain agent's own decisions - those stay exactly where
+# Phases 24/30/31/32/37 put them.
 AGENT_CATALOG: list[tuple[str, str, str, str, list[str]]] = [
-    ("farm_manager", "Farm Manager Agent", "orchestration", "Coordinates the domain agents below it; no direct actions yet.", []),
+    ("farm_manager", "Farm Manager Agent", "orchestration", "Coordinates the domain agents below it and synthesizes a cross-domain briefing.", ["cross_domain_briefing"]),
     ("crop", "Crop Agent", "crop", "Tracks crop/tree growth stage and health.", ["crop_health_assessment"]),
     ("weather", "Weather Agent", "weather", "Summarizes weather risk for irrigation/disease decisions.", ["weather_risk_alert"]),
     ("soil", "Soil Agent", "soil", "Assesses soil moisture/nutrient status.", ["soil_health_assessment"]),

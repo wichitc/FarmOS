@@ -370,3 +370,121 @@ def test_farm_score_farm_scoped_abac(client, tenant):
 
     denied_res = client.get(f"/api/v1/ai/farms/{farm_b['id']}/score", headers=manager_headers)
     assert denied_res.status_code == 403
+
+
+def test_farm_manager_briefing_with_no_issues_is_reassuring(client, tenant):
+    """Master-prompt integration, Phase 40: a fresh farm with no signals
+    gets exactly one reassuring priority line, not a fabricated list."""
+    headers = tenant.auth_headers(client)
+    farm = _create_farm_for_score(client, headers, code="BRIEFFARM1")
+
+    res = client.get(f"/api/v1/ai/farms/{farm['id']}/briefing", headers=headers)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["farm_score"]["band"] == "good"
+    assert body["open_alert_count"] == 0
+    assert body["recent_agent_actions"] == []
+    assert body["priorities"] == ["No urgent issues detected across the farm's monitored signals."]
+
+
+def test_farm_manager_briefing_surfaces_a_dropped_score_and_recent_agent_activity(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm_for_score(client, headers, code="BRIEFFARM2")
+    disease = client.post(
+        "/api/v1/crop-health/diseases",
+        json={"code": f"brief-blight-{tenant.tenant_slug}", "name_en": "Blight", "name_th": "ใบไหม้", "pathogen_type": "fungal"},
+        headers=headers,
+    ).json()
+    incident = client.post(
+        f"/api/v1/crop-health/farms/{farm['id']}/incidents", json={"disease_id": disease["id"], "risk_score": 90}, headers=headers
+    ).json()
+    # An ai_recommended treatment plan gives the briefing a real, recent
+    # Disease Agent action to surface (Phase 37's wiring).
+    client.post(
+        "/api/v1/crop-health/treatment-plans",
+        json={"incident_id": incident["id"], "method": "copper spray", "source": "ai_recommended", "reason": "Elevated risk"},
+        headers=headers,
+    )
+
+    res = client.get(f"/api/v1/ai/farms/{farm['id']}/briefing", headers=headers)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["farm_score"]["band"] != "good"
+    assert any("score" in p.lower() for p in body["priorities"])
+    assert any(a["agent_code"] == "disease" and a["action_type"] == "treatment_recommendation" for a in body["recent_agent_actions"])
+
+
+def test_farm_manager_briefing_counts_open_alerts(client, tenant, raw_db):
+    from app.core.deps import set_tenant_context
+    from app.iot import models as iot_models
+    from app.iot.ingestion import process_reading
+
+    headers = tenant.auth_headers(client)
+    farm = _create_farm_for_score(client, headers, code="BRIEFFARM3")
+    twin_type = client.post(
+        "/api/v1/twins/types", json={"code": f"brief-sensor-{tenant.tenant_slug}", "name": "Sensor", "category": "sensor"}, headers=headers
+    ).json()
+    device_res = client.post(
+        "/api/v1/iot/devices",
+        json={"farm_id": farm["id"], "twin_type_id": twin_type["id"], "display_code": "BRIEF-DEV", "device_key": "brief-dev", "protocol": "mqtt"},
+        headers=headers,
+    ).json()
+    client.post(
+        "/api/v1/iot/rules",
+        json={"twin_type_id": twin_type["id"], "metric": "temp_c", "operator": "gt", "threshold_value": 40, "severity": "high", "message_template": "{metric} is {value}"},
+        headers=headers,
+    )
+
+    set_tenant_context(raw_db, tenant.tenant_id)
+    device = raw_db.get(iot_models.IotDevice, device_res["id"])
+    process_reading(raw_db, device=device, metric="temp_c", value=45.0, secret=device_res["secret"])
+
+    res = client.get(f"/api/v1/ai/farms/{farm['id']}/briefing", headers=headers)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["open_alert_count"] == 1
+    assert any("open alert" in p.lower() for p in body["priorities"])
+
+
+def test_farm_manager_briefing_records_an_agent_action(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm_for_score(client, headers, code="BRIEFFARM4")
+
+    res = client.get(f"/api/v1/ai/farms/{farm['id']}/briefing", headers=headers)
+    assert res.status_code == 200, res.text
+
+    actions_res = client.get("/api/v1/ai/agents/farm_manager/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    matching = [a for a in actions_res.json() if a["entity_id"] == farm["id"]]
+    assert len(matching) == 1
+    action = matching[0]
+    assert action["level"] == "L1"
+    assert action["status"] == "executed"
+    assert action["action_type"] == "cross_domain_briefing"
+
+
+def test_farm_manager_briefing_farm_scoped_abac(client, tenant):
+    admin_headers = tenant.auth_headers(client)
+    farm_a = client.post("/api/v1/farm/farms", json={"code": "BRIEFA", "name": "Brief Farm A"}, headers=admin_headers).json()
+    farm_b = client.post("/api/v1/farm/farms", json={"code": "BRIEFB", "name": "Brief Farm B"}, headers=admin_headers).json()
+
+    email = f"briefmgr-{unique_slug('u')}@example.com"
+    password = "pw-for-testing-123"
+    user = client.post(
+        "/api/v1/users", json={"email": email, "password": password, "full_name": "Briefing Manager"}, headers=admin_headers
+    ).json()
+    roles = {r["code"]: r["id"] for r in client.get("/api/v1/roles", headers=admin_headers).json()}
+    client.post(
+        "/api/v1/role-assignments",
+        json={"user_id": user["id"], "role_id": roles["farm_manager"], "scope_type": "farm", "scope_id": farm_a["id"]},
+        headers=admin_headers,
+    )
+
+    login_res = client.post("/api/v1/auth/login", json={"tenant_slug": tenant.tenant_slug, "email": email, "password": password})
+    manager_headers = {"Authorization": f"Bearer {login_res.json()['access_token']}"}
+
+    ok_res = client.get(f"/api/v1/ai/farms/{farm_a['id']}/briefing", headers=manager_headers)
+    assert ok_res.status_code == 200
+
+    denied_res = client.get(f"/api/v1/ai/farms/{farm_b['id']}/briefing", headers=manager_headers)
+    assert denied_res.status_code == 403

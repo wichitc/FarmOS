@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from ...ai import agent_gateway
 from ...ai import copilot
+from ...ai import farm_manager
 from ...ai import farm_score as ai_farm_score
 from ...ai import models as ai_models
 from ...ai import schemas as ai_schemas
@@ -469,4 +470,53 @@ def get_farm_score(
     return ai_schemas.FarmScoreOut(
         farm_id=farm.id, score=result.score, band=result.band,
         factors=[ai_schemas.ScoreFactorOut(**vars(f)) for f in result.factors],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Farm Manager orchestration (master-prompt integration, Phase 40, §28)
+# ---------------------------------------------------------------------------
+
+@router.get("/farms/{farm_id}/briefing", response_model=ai_schemas.FarmManagerBriefingOut)
+def get_farm_manager_briefing(
+    farm_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("dashboard.view")),
+):
+    """Same `dashboard.view` reuse as farm score - a read-only composite
+    view. Every call is genuinely the Farm Manager doing its one real
+    job (observing and synthesizing across domains), so the L1
+    `AgentAction` is recorded unconditionally, the same "always record"
+    shape Phase 31 used for the Yield Agent rather than a conditional
+    trigger."""
+    farm = _get_or_404(db, farm_models.Farm, farm_id, "Farm")
+    assert_farm_scope(db, current_user, "dashboard.view", farm.id)
+
+    briefing = farm_manager.compile_briefing(db, tenant_id=current_user.tenant_id, farm_id=farm.id)
+
+    agent_action = agent_gateway.propose_action(
+        db, tenant_id=current_user.tenant_id, actor=current_user,
+        agent_code="farm_manager", action_type="cross_domain_briefing", requested_level="L1",
+        entity_type="farm", entity_id=farm.id, farm_id=farm.id,
+        rationale=briefing.priorities[0],
+        input_context={"farm_score": briefing.farm_score.score, "open_alert_count": briefing.open_alert_count},
+        correlation_id=_correlation_id(request),
+    )
+    agent_gateway.execute_action(
+        db, action=agent_action, actor=current_user,
+        result={"farm_score": briefing.farm_score.score, "priorities": briefing.priorities},
+        correlation_id=_correlation_id(request),
+    )
+    db.commit()
+
+    return ai_schemas.FarmManagerBriefingOut(
+        farm_id=farm.id,
+        farm_score=ai_schemas.FarmScoreOut(
+            farm_id=farm.id, score=briefing.farm_score.score, band=briefing.farm_score.band,
+            factors=[ai_schemas.ScoreFactorOut(**vars(f)) for f in briefing.farm_score.factors],
+        ),
+        recent_agent_actions=[ai_schemas.RecentAgentActionOut(**vars(a)) for a in briefing.recent_agent_actions],
+        open_alert_count=briefing.open_alert_count,
+        priorities=briefing.priorities,
     )
