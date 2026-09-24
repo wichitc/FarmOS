@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     # last-seen timestamps.
     sla_watch_interval_seconds: int = 300
 
+    # Trial expiry watcher (master-prompt integration, Phase 34) - same
+    # polling-loop shape as `sla_watch_interval_seconds`, for
+    # `Subscription.trial_ends_at` instead of ticket SLAs.
+    trial_watch_interval_seconds: int = 3600
+
     model_config = SettingsConfigDict(env_file=str(BACKEND_DIR / ".env"), env_file_encoding="utf-8")
 
     @property

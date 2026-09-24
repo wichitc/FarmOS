@@ -135,6 +135,24 @@ services:
         condition: service_started
     command: python -m app.scripts.sla_watcher
 
+  # Trial expiry watcher (master-prompt integration, Phase 34): same
+  # shape as `sla-watcher`, one job per script.
+  trial-watcher:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://durianos:durianos@db:5432/durianos
+      APP_DATABASE_URL: postgresql+psycopg://durianos_app:durianos_app@db:5432/durianos
+      SECRET_KEY: dev-only-insecure-secret-change-me
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: python -m app.scripts.trial_watcher
+
 volumes:
   db-data:
   minio-data:

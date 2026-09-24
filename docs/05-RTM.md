@@ -736,3 +736,18 @@ Support tickets have computed a real `sla_due_at` since Phase 20, but nothing ev
 - **A breach is recorded, not escalated or notified** - `sla_breached_at` is queryable via the existing ticket API, but nothing emails/pages anyone when it's set; wiring that to a real notification channel needs the same email-provider vendor decision already deferred since Phase 22 (SendGrid/SES/SMTP)
 - **Not reused for the IoT `Alert` model's own SLA/escalation gap** - `iot_models.Alert`'s docstring names the same missing-scheduler problem for alert acknowledgement SLAs; this phase solves it for support tickets specifically, not as a generic escalation-timer framework other alert types could plug into yet
 - **No backfill for tickets created before this phase** - a ticket whose `sla_due_at` already passed before the watcher started gets flagged on the watcher's first sweep after startup, same as any other overdue ticket; there's no special first-run handling because none is needed
+
+## Master-prompt integration, Phase 34: Trial expiry watcher
+
+Phase 21's own deferral, restated verbatim there: "`trial_ends_at` passing does not itself change `status` from `trialing` to anything else; there is no scheduled job watching for it." Same polling-loop shape Phase 33 just established for SLA breaches, applied to trial expiry.
+
+- [x] **`subscription/service.py::check_trial_expirations(db)`** - moves any subscription with `status == "trialing"` and a passed `trial_ends_at` to `"past_due"` (already in `SUBSCRIPTION_STATUSES` - not a new status invented for this; the tenant didn't cancel anything, their trial simply ran out with no payment behind it, which is what `past_due` already means). Naturally idempotent - once `status` moves off `"trialing"` a subscription is never selected again, no separate marker column needed the way `SupportTicket.sla_breached_at` needed one (a subscription's `status` *is* the "was this flagged" fact here, unlike a ticket that can still resolve after breaching)
+- [x] **`app/scripts/trial_watcher.py`** + new `trial-watcher` docker-compose service (`trial_watch_interval_seconds` setting, default 3600s - trial expiry doesn't need Phase 33's 300s cadence) - its own dedicated script rather than folded into `sla_watcher.py`, same "one job per script" discipline `seed_demo.py`/`sensor_simulator.py`/`bootstrap.py` already follow
+- [x] Automated tests (`backend/tests/test_trial_watcher.py`): an expired trial moves to `past_due`; a trial not yet ended is untouched; a non-`trialing` subscription (e.g. already `active`) is never touched even with a past `trial_ends_at`; a second sweep doesn't re-select an already-moved subscription
+- [x] Verified live: rebuilt the backend image, started the `trial-watcher` service, confirmed its startup log
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **`past_due` has no behavioral consequence yet** - this phase only makes the status honest; nothing currently restricts a `past_due` tenant differently from an `active` one (same "reports real state, doesn't yet enforce on it" gap Phase 21 originally left for plan limits, closed for limits in Phase 29 but not extended to subscription status here)
+- **No self-service reactivation/upgrade path** - unchanged from Phase 21's own deferral; moving off `past_due` is still a platform-staff-only `change-plan` call
+- **This closes out the two scheduler-shaped deferrals this series was tracking** (Phase 20's SLA breaches in Phase 33, Phase 21's trial expiry here) - both built as small, single-purpose polling loops rather than adopting a general job-scheduler dependency this platform doesn't otherwise need yet

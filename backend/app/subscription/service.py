@@ -113,3 +113,36 @@ def enforce_limit(db: Session, tenant_id: str, resource: str) -> None:
         return
     if line.used >= line.limit:
         raise PlanLimitExceeded(resource, line.used, line.limit)
+
+
+def check_trial_expirations(db: Session) -> list[sub_models.Subscription]:
+    """Master-prompt integration, Phase 34: `trial_ends_at` passing has
+    had no automatic consequence since Phase 21 - flagged explicitly as
+    a deferral at the time. Moves an expired trial to `"past_due"`
+    (already in `SUBSCRIPTION_STATUSES`, not a new status invented for
+    this) rather than `"cancelled"` - the tenant didn't cancel anything,
+    their trial simply ran out with no payment behind it, which is what
+    `past_due` already means. Naturally idempotent: once `status` moves
+    off `"trialing"` a subscription is never selected by this query
+    again, no separate marker column needed (unlike `SupportTicket.
+    sla_breached_at`, which has to persist a permanent "was breached"
+    fact even after the ticket resolves - a subscription's status *is*
+    that fact here).
+
+    No behavioral enforcement is wired to `"past_due"` yet - this only
+    makes the status honest; see the RTM deferral note.
+    """
+    now = datetime.now(timezone.utc)
+    expired = (
+        db.query(sub_models.Subscription)
+        .filter(
+            sub_models.Subscription.status == "trialing",
+            sub_models.Subscription.trial_ends_at.isnot(None),
+            sub_models.Subscription.trial_ends_at < now,
+        )
+        .all()
+    )
+    for subscription in expired:
+        subscription.status = "past_due"
+    db.commit()
+    return expired
