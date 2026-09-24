@@ -189,6 +189,32 @@ def test_incident_requires_confirmed_detection(client, tenant):
     assert allowed_res.status_code == 201, allowed_res.text
     assert allowed_res.json()["source_detection_id"] == detection["id"]
 
+    # Master-prompt integration, Phase 30: a detection-sourced incident
+    # gets a real, immediately-closed L1 AgentAction from the Disease
+    # Agent - same Observe->Analyze shape Phase 24 wired up for
+    # Irrigation, keyed off the one real "this came from an AI
+    # observation" signal DiseaseIncident carries (source_detection_id),
+    # since incidents have no separate `source` enum like plans do.
+    incident = allowed_res.json()
+    actions_res = client.get("/api/v1/ai/agents/disease/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    matching = [a for a in actions_res.json() if a["entity_id"] == incident["id"]]
+    assert len(matching) == 1
+    action = matching[0]
+    assert action["level"] == "L1"
+    assert action["status"] == "executed"
+    assert action["action_type"] == "disease_risk_assessment"
+    assert action["result"]["disease_incident_id"] == incident["id"]
+
+    # A manually-reported incident (no source_detection_id) gets no agent action.
+    manual_incident = client.post(
+        f"/api/v1/crop-health/farms/{farm['id']}/incidents",
+        json={"disease_id": disease["id"]},
+        headers=headers,
+    ).json()
+    actions_after_res = client.get("/api/v1/ai/agents/disease/actions", headers=headers)
+    assert manual_incident["id"] not in [a["entity_id"] for a in actions_after_res.json()]
+
 
 def test_disease_risk_endpoint_combines_weather(client, tenant):
     headers = tenant.auth_headers(client)

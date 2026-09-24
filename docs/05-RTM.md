@@ -674,3 +674,18 @@ Master prompt §37's entitlement model (Phase 21) reported real usage against re
 - **No self-service upgrade prompt** - a blocked create returns `402` with the current usage/limit, but nothing links the caller to an upgrade flow (Phase 21 already deferred self-service upgrade entirely - it would need real payment collection, out of scope)
 - **Other resource types are not limit-gated** - `Plan.features` (e.g. `ai_copilot`, `ai_agents`) is stored but nothing checks it before allowing a feature-gated action; this phase only wires the three numeric limits (`farm_limit`/`user_limit`/`sensor_limit`) already being reported by `GET /subscriptions/me`
 - **Race-tolerant, not race-proof** - `enforce_limit` counts rows at call time with no locking; two concurrent creates right at the limit could both pass, same best-effort tolerance this platform's other advisory checks already accept rather than adding distributed locking for an edge case
+
+## Master-prompt integration, Phase 30: Two more agents wired to real domain actions
+
+Phase 24's own deferral, restated verbatim there: "wiring each one is the same shape of change made here to Irrigation, just not done ten more times in this pass." This phase picks up two more of the eleven cataloged agents - Fertilizer and Disease - applying that same shape, still without a Farm Manager orchestration engine or touching the Agent Action Gateway itself.
+
+- [x] **Fertilizer Agent -> `fertigation_recommendation`** (`routers/v1/irrigation.py::create_fertigation_plan`): an exact structural mirror of Phase 24's Irrigation wiring - `source == "ai_recommended"` triggers a real, immediately-closed L1 `AgentAction` (Observe/Analyze/Recommend); the actual fertigation application stays gated behind the same plan's pre-existing approve/execute flow (Phase 8), completely unchanged. A manually-sourced plan gets no agent action, same as Irrigation
+- [x] **Disease Agent -> `disease_risk_assessment`** (`routers/v1/crophealth.py::create_incident`): `DiseaseIncident` has no `source` enum the way plans do, so this wiring keys off the one real signal it does carry - `source_detection_id` (a confirmed Vision AI detection, Phase 9). An incident created from a confirmed detection gets a real L1 `AgentAction`; a manually-reported incident (no detection) gets none. Deciding what to do about the incident stays entirely human, via the unrelated `TreatmentPlan` approve/execute flow
+- [x] Automated tests: `test_irrigation.py::test_ai_recommended_fertigation_plan_records_an_agent_action` (mirrors the existing Irrigation test exactly - action recorded for `ai_recommended`, none for `manual`), `test_crophealth.py::test_incident_requires_confirmed_detection` extended with the same assertion shape (action recorded when `source_detection_id` is set, none for a manual incident)
+- [x] Verified live: full regression suite, zero regressions
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **Eight of eleven agents remain unwired to a real domain action** (Weather, Soil, Pest, Yield, Finance, Sustainability, plus Crop and Farm Manager's orchestration role) - each one is the same shape of change made here, just not done six more times in this pass
+- **`treatment_recommendation`** (the Disease Agent's other cataloged action type) **is still unwired** - `TreatmentPlan` has no `source`/AI-origin signal the way `IrrigationPlan`/`FertigationPlan` do or `DiseaseIncident`'s `source_detection_id` does, so there is no clean trigger to key off yet without adding a new field; deferred rather than fabricating one
+- **No Farm Manager orchestration/synthesis logic** - unchanged from Phase 24's own deferral; `farm_manager` stays a cataloged placeholder

@@ -259,3 +259,43 @@ def test_ai_recommended_plan_records_an_agent_action(client, tenant):
     ).json()
     actions_after_res = client.get("/api/v1/ai/agents/irrigation/actions", headers=headers)
     assert manual_plan["id"] not in [a["entity_id"] for a in actions_after_res.json()]
+
+
+def test_ai_recommended_fertigation_plan_records_an_agent_action(client, tenant):
+    """Master-prompt integration, Phase 30: the same ai_recommended->L1
+    AgentAction shape Phase 24 wired up for Irrigation, applied to the
+    Fertilizer agent (cataloged since Phase 24, never called until now)."""
+    headers = tenant.auth_headers(client)
+    farm, plot = _create_farm_with_plot(client, headers, farm_code="FERTFARM_AI")
+    fertilizer = client.post(
+        "/api/v1/irrigation/fertilizers",
+        json={"code": "npk-ai", "name": "NPK AI", "composition": {"N": 15, "P": 15, "K": 15}},
+        headers=headers,
+    ).json()
+
+    plan = client.post(
+        f"/api/v1/irrigation/farms/{farm['id']}/fertigation-plans",
+        json={
+            "plot_id": plot["id"], "fertilizer_id": fertilizer["id"], "source": "ai_recommended",
+            "target_n_kg": 3.0, "recommended_quantity_kg": 20.0, "reason": "Nitrogen deficiency detected",
+        },
+        headers=headers,
+    ).json()
+
+    actions_res = client.get("/api/v1/ai/agents/fertilizer/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    matching = [a for a in actions_res.json() if a["entity_id"] == plan["id"]]
+    assert len(matching) == 1
+    action = matching[0]
+    assert action["level"] == "L1"
+    assert action["status"] == "executed"
+    assert action["action_type"] == "fertigation_recommendation"
+    assert action["result"]["fertigation_plan_id"] == plan["id"]
+
+    manual_plan = client.post(
+        f"/api/v1/irrigation/farms/{farm['id']}/fertigation-plans",
+        json={"plot_id": plot["id"], "fertilizer_id": fertilizer["id"], "source": "manual"},
+        headers=headers,
+    ).json()
+    actions_after_res = client.get("/api/v1/ai/agents/fertilizer/actions", headers=headers)
+    assert manual_plan["id"] not in [a["entity_id"] for a in actions_after_res.json()]

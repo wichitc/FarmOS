@@ -5,6 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...ai import agent_gateway
 from ...core.deps import assert_farm_scope, require_permission
 from ...crophealth import models as ch_models
 from ...crophealth import schemas as ch_schemas
@@ -157,6 +158,7 @@ def compute_farm_disease_risk(
 def create_incident(
     farm_id: str,
     payload: ch_schemas.DiseaseIncidentCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("crophealth.incident.manage")),
 ):
@@ -201,6 +203,35 @@ def create_incident(
         entity_id=incident.id,
         new_values={"farm_id": farm.id, "disease_id": payload.disease_id, "status": incident.status},
     )
+
+    if payload.source_detection_id:
+        # Disease Agent's Observe->Analyze record (master-prompt
+        # integration, Phase 30 - same shape as the Irrigation/Fertilizer
+        # agent wirings). A confirmed Vision AI detection (Phase 9) is the
+        # one real "this incident came from an AI observation, not a
+        # human report" signal `DiseaseIncident` carries - there's no
+        # separate `source` enum the way plans have one. L1 ("advisory")
+        # since assessing risk from a detection isn't itself a risky
+        # action; deciding what to do about the incident stays a human
+        # call via the unrelated TreatmentPlan approve/execute flow below
+        agent_action = agent_gateway.propose_action(
+            db, tenant_id=current_user.tenant_id, actor=current_user,
+            agent_code="disease", action_type="disease_risk_assessment", requested_level="L1",
+            entity_type="disease_incident", entity_id=incident.id, farm_id=farm.id,
+            rationale=incident.notes or "Disease incident created from a confirmed Vision AI detection.",
+            input_context={
+                "source_detection_id": payload.source_detection_id,
+                "risk_score": payload.risk_score,
+                "confidence": payload.confidence,
+            },
+            correlation_id=_correlation_id(request),
+        )
+        agent_gateway.execute_action(
+            db, action=agent_action, actor=current_user,
+            result={"disease_incident_id": incident.id, "risk_score": payload.risk_score},
+            correlation_id=_correlation_id(request),
+        )
+
     db.commit()
     return incident
 

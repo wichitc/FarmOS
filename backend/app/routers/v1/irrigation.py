@@ -347,6 +347,7 @@ def list_fertilizers(
 def create_fertigation_plan(
     farm_id: str,
     payload: irr_schemas.FertigationPlanCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("fertigation.plan.manage")),
 ):
@@ -383,6 +384,33 @@ def create_fertigation_plan(
         entity_id=plan.id,
         new_values={"farm_id": farm.id, "fertilizer_id": payload.fertilizer_id},
     )
+
+    if payload.source == "ai_recommended":
+        # Fertilizer Agent's Observe->Analyze->Recommend record (master-
+        # prompt integration, Phase 30 - the same shape Phase 24 wired up
+        # for Irrigation, applied to the Fertilizer agent cataloged since
+        # Phase 24 but never called until now). L1 ("advisory") for the
+        # same reason: recommending a plan isn't the risky action - the
+        # actual fertigation application stays gated behind this plan's
+        # own pre-existing approve/execute flow (Phase 8), unchanged.
+        agent_action = agent_gateway.propose_action(
+            db, tenant_id=current_user.tenant_id, actor=current_user,
+            agent_code="fertilizer", action_type="fertigation_recommendation", requested_level="L1",
+            entity_type="fertigation_plan", entity_id=plan.id, farm_id=farm.id,
+            rationale=plan.reason or "AI-recommended fertigation plan.",
+            input_context={
+                "plot_id": payload.plot_id,
+                "fertilizer_id": payload.fertilizer_id,
+                "recommended_quantity_kg": payload.recommended_quantity_kg,
+            },
+            correlation_id=_correlation_id(request),
+        )
+        agent_gateway.execute_action(
+            db, action=agent_action, actor=current_user,
+            result={"fertigation_plan_id": plan.id, "recommended_quantity_kg": payload.recommended_quantity_kg},
+            correlation_id=_correlation_id(request),
+        )
+
     db.commit()
     return plan
 
