@@ -66,6 +66,7 @@ class TreatmentPlanCreate(BaseModel):
     work_task_ref: Optional[str] = None
     reason: Optional[str] = None
     scheduled_for: Optional[datetime] = None
+    source: str = "manual"
 
 
 class TreatmentPlanOut(BaseModel):
@@ -79,6 +80,7 @@ class TreatmentPlanOut(BaseModel):
     status: str
     scheduled_for: Optional[datetime] = None
     workflow_instance_id: Optional[str] = None
+    source: str
 
     model_config = ConfigDict(from_attributes=True)
 

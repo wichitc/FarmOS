@@ -120,6 +120,46 @@ def test_treatment_plan_full_lifecycle_syncs_incident_status(client, tenant):
     assert incident_after_execute["status"] == "treatment_applied"
 
 
+def test_ai_recommended_treatment_plan_records_an_agent_action(client, tenant):
+    """Master-prompt integration, Phase 37: the Disease Agent's second
+    cataloged action type, treatment_recommendation - unwired since
+    Phase 30 for lack of a source signal, now that TreatmentPlan carries
+    the same source field Irrigation/Fertigation plans always have."""
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="CHFARM_AI")
+    disease = _create_disease(client, headers, code=f"blight-{tenant.tenant_slug}")
+    incident = client.post(
+        f"/api/v1/crop-health/farms/{farm['id']}/incidents", json={"disease_id": disease["id"]}, headers=headers
+    ).json()
+
+    plan = client.post(
+        "/api/v1/crop-health/treatment-plans",
+        json={
+            "incident_id": incident["id"], "method": "copper fungicide spray", "source": "ai_recommended",
+            "reason": "Elevated disease risk score",
+        },
+        headers=headers,
+    ).json()
+
+    actions_res = client.get("/api/v1/ai/agents/disease/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    matching = [a for a in actions_res.json() if a["entity_id"] == plan["id"]]
+    assert len(matching) == 1
+    action = matching[0]
+    assert action["level"] == "L1"
+    assert action["status"] == "executed"
+    assert action["action_type"] == "treatment_recommendation"
+    assert action["result"]["treatment_plan_id"] == plan["id"]
+
+    manual_plan = client.post(
+        "/api/v1/crop-health/treatment-plans",
+        json={"incident_id": incident["id"], "method": "manual spray", "source": "manual"},
+        headers=headers,
+    ).json()
+    actions_after_res = client.get("/api/v1/ai/agents/disease/actions", headers=headers)
+    assert manual_plan["id"] not in [a["entity_id"] for a in actions_after_res.json()]
+
+
 def test_treatment_plan_reject_path_blocks_execution(client, tenant):
     headers = tenant.auth_headers(client)
     farm = _create_farm(client, headers, code="CHFARM3")

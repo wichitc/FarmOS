@@ -57,6 +57,7 @@ INCIDENT_ALLOWED_TRANSITIONS: dict[str, tuple[str, ...]] = {
 }
 
 PLAN_STATUSES = ("draft", "pending_approval", "approved", "rejected", "completed", "cancelled")
+PLAN_SOURCES = ("manual", "scheduled", "rule_based", "ai_recommended")
 
 
 def _uuid_pk() -> Mapped[str]:
@@ -109,6 +110,12 @@ class TreatmentPlan(TenantScopedMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="draft")
     scheduled_for: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     workflow_instance_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("workflow_instances.id"), nullable=True)
+    # Master-prompt integration, Phase 37: the "was this AI-originated"
+    # signal `IrrigationPlan`/`FertigationPlan` have had since Phase 8 -
+    # deliberately not added back in Phase 30, which declined to
+    # fabricate one rather than wire treatment_recommendation without a
+    # real trigger. Same PLAN_SOURCES shape as those two.
+    source: Mapped[str] = mapped_column(String(20), default="manual")
 
 
 class TreatmentEvent(TenantScopedMixin, Base):

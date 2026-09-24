@@ -328,6 +328,7 @@ def _active_definition(db: Session, tenant_id: str, entity_type: str) -> fm.Work
 @router.post("/treatment-plans", response_model=ch_schemas.TreatmentPlanOut, status_code=201)
 def create_treatment_plan(
     payload: ch_schemas.TreatmentPlanCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("crophealth.treatment.manage")),
 ):
@@ -343,6 +344,7 @@ def create_treatment_plan(
         work_task_ref=payload.work_task_ref,
         reason=payload.reason,
         scheduled_for=payload.scheduled_for,
+        source=payload.source,
         created_by=current_user.id,
         updated_by=current_user.id,
     )
@@ -358,6 +360,31 @@ def create_treatment_plan(
         entity_id=plan.id,
         new_values={"incident_id": incident.id},
     )
+
+    if payload.source == "ai_recommended":
+        # Disease Agent's second cataloged action type (master-prompt
+        # integration, Phase 37) - `disease_risk_assessment` (Phase 30)
+        # covers the incident side; this covers the treatment side, now
+        # that TreatmentPlan carries the same source signal Irrigation/
+        # Fertigation plans always have. L1 ("advisory") for the same
+        # reason as those: recommending a treatment isn't itself the
+        # risky action - actually applying it stays gated behind this
+        # same plan's own pre-existing approve/execute flow (Phase 10's
+        # WorkflowDefinition-based approval), unchanged.
+        agent_action = agent_gateway.propose_action(
+            db, tenant_id=current_user.tenant_id, actor=current_user,
+            agent_code="disease", action_type="treatment_recommendation", requested_level="L1",
+            entity_type="treatment_plan", entity_id=plan.id, farm_id=incident.farm_id,
+            rationale=plan.reason or "AI-recommended treatment plan.",
+            input_context={"incident_id": incident.id, "method": payload.method, "chemical_or_treatment": payload.chemical_or_treatment},
+            correlation_id=_correlation_id(request),
+        )
+        agent_gateway.execute_action(
+            db, action=agent_action, actor=current_user,
+            result={"treatment_plan_id": plan.id, "method": payload.method},
+            correlation_id=_correlation_id(request),
+        )
+
     db.commit()
     return plan
 
