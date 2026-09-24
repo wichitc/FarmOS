@@ -1,7 +1,7 @@
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from ...accounting import models as acct_models
 from ...accounting import schemas as acct_schemas
 from ...accounting.profitability import compute_profitability
 from ...accounting.service import post_ledger_entry
+from ...ai import agent_gateway
 from ...core.deps import assert_farm_scope, require_permission
 from ...database import get_db
 from ...foundation import models as fm
@@ -19,12 +20,21 @@ router = APIRouter(prefix="/api/v1/accounting", tags=["accounting"])
 
 _HEATMAP_GROUP_BY_FIELDS = ("plot_id", "tree_id", "crop_id", "asset_twin_id", "cost_center_id")
 
+# Master-prompt integration, Phase 41: indicative, not a calibrated
+# figure - same "shape now" caveat every other threshold table in this
+# platform carries (health.py, farm_score.py, weather/risk.py).
+BUDGET_ALERT_THRESHOLD_PCT = 10.0
+
 
 def _get_or_404(db: Session, model, obj_id: str, label: str):
     obj = db.get(model, obj_id)
     if obj is None:
         raise HTTPException(status_code=404, detail=f"{label} not found")
     return obj
+
+
+def _correlation_id(request: Request) -> str:
+    return request.headers.get("x-correlation-id", "")
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +198,7 @@ def list_budgets(
 @router.get("/budgets/{budget_id}/variance", response_model=acct_schemas.BudgetVarianceOut)
 def budget_variance(
     budget_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     user: fm.User = Depends(require_permission("accounting.budget.view")),
 ):
@@ -207,6 +218,36 @@ def budget_variance(
     actual = sum(e.amount for e in actual_entries)
     variance = actual - budget.amount
     variance_pct = round((variance / budget.amount) * 100, 2) if budget.amount else 0.0
+
+    # Finance Agent's `budget_alert` action type (master-prompt
+    # integration, Phase 41) - only the concerning direction of variance
+    # is alert-worthy: expenses running *over* budget, or revenue running
+    # *under* budget. The opposite (spent less than planned, earned more
+    # than planned) is good news, not something to flag. Not in
+    # ACTION_LEVEL_FLOORS, so L1 ("advisory") is unrestricted - reading a
+    # variance and saying so isn't itself a risky action, unlike actually
+    # posting a financial entry (`financial_posting`, still L3-floor-
+    # gated and deliberately left unwired - see the RTM deferral note).
+    is_concerning = (budget.direction == "expense" and variance_pct > BUDGET_ALERT_THRESHOLD_PCT) or (
+        budget.direction == "revenue" and variance_pct < -BUDGET_ALERT_THRESHOLD_PCT
+    )
+    if is_concerning:
+        farm_id = budget.dimensions.get("farm_id")
+        agent_action = agent_gateway.propose_action(
+            db, tenant_id=user.tenant_id, actor=user,
+            agent_code="finance", action_type="budget_alert", requested_level="L1",
+            entity_type="budget", entity_id=budget.id, farm_id=farm_id,
+            rationale=f"{budget.direction} variance is {variance_pct:+.1f}% against budget.",
+            input_context={"direction": budget.direction, "budgeted_amount": budget.amount, "actual_amount": actual, "variance_pct": variance_pct},
+            correlation_id=_correlation_id(request),
+        )
+        agent_gateway.execute_action(
+            db, action=agent_action, actor=user,
+            result={"budget_id": budget.id, "variance_pct": variance_pct},
+            correlation_id=_correlation_id(request),
+        )
+        db.commit()
+
     return acct_schemas.BudgetVarianceOut(
         budget_id=budget.id, budgeted_amount=budget.amount, actual_amount=actual,
         variance=round(variance, 2), variance_pct=variance_pct,

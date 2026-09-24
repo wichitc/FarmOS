@@ -84,6 +84,73 @@ def test_budget_variance(client, tenant):
     assert variance["variance"] == 200.0
 
 
+def test_budget_variance_within_threshold_records_no_agent_action(client, tenant):
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="ACCFARM5")
+    budget = client.post(
+        "/api/v1/accounting/budgets",
+        json={"direction": "expense", "amount": 1000.0, "dimensions": {"farm_id": farm["id"]}, "period_start": "2026-01-01", "period_end": "2026-12-31"},
+        headers=headers,
+    ).json()
+    _post_entry(client, headers, "expense", 1050.0, {"farm_id": farm["id"]})  # +5%, under the 10% threshold
+
+    variance_res = client.get(f"/api/v1/accounting/budgets/{budget['id']}/variance", headers=headers)
+    assert variance_res.status_code == 200, variance_res.text
+
+    actions_res = client.get("/api/v1/ai/agents/finance/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    assert budget["id"] not in [a["entity_id"] for a in actions_res.json()]
+
+
+def test_budget_variance_over_threshold_records_a_finance_agent_action(client, tenant):
+    """Master-prompt integration, Phase 41: expenses running over budget
+    trigger the Finance Agent's real budget_alert action."""
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="ACCFARM6")
+    budget = client.post(
+        "/api/v1/accounting/budgets",
+        json={"direction": "expense", "amount": 1000.0, "dimensions": {"farm_id": farm["id"]}, "period_start": "2026-01-01", "period_end": "2026-12-31"},
+        headers=headers,
+    ).json()
+    _post_entry(client, headers, "expense", 1200.0, {"farm_id": farm["id"]})  # +20%, over the threshold
+
+    variance_res = client.get(f"/api/v1/accounting/budgets/{budget['id']}/variance", headers=headers)
+    assert variance_res.status_code == 200, variance_res.text
+
+    actions_res = client.get("/api/v1/ai/agents/finance/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    matching = [a for a in actions_res.json() if a["entity_id"] == budget["id"]]
+    assert len(matching) == 1
+    action = matching[0]
+    assert action["level"] == "L1"
+    assert action["status"] == "executed"
+    assert action["action_type"] == "budget_alert"
+    assert action["result"]["variance_pct"] == 20.0
+
+
+def test_budget_variance_revenue_shortfall_records_a_finance_agent_action(client, tenant):
+    """The opposite direction matters too: expenses running *under*
+    budget or revenue running *over* budget is good news, not flagged -
+    only revenue running under budget is concerning."""
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="ACCFARM7")
+    budget = client.post(
+        "/api/v1/accounting/budgets",
+        json={"direction": "revenue", "amount": 1000.0, "dimensions": {"farm_id": farm["id"]}, "period_start": "2026-01-01", "period_end": "2026-12-31"},
+        headers=headers,
+    ).json()
+    _post_entry(client, headers, "revenue", 800.0, {"farm_id": farm["id"]})  # -20%, a shortfall
+
+    variance_res = client.get(f"/api/v1/accounting/budgets/{budget['id']}/variance", headers=headers)
+    assert variance_res.status_code == 200, variance_res.text
+
+    actions_res = client.get("/api/v1/ai/agents/finance/actions", headers=headers)
+    assert actions_res.status_code == 200, actions_res.text
+    matching = [a for a in actions_res.json() if a["entity_id"] == budget["id"]]
+    assert len(matching) == 1
+    assert matching[0]["action_type"] == "budget_alert"
+
+
 def test_profitability_heatmap_groups_by_plot(client, tenant):
     headers = tenant.auth_headers(client)
     farm = _create_farm(client, headers, code="ACCFARM4")
