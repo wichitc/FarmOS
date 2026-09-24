@@ -172,6 +172,15 @@ class TicketMessage(Base):
     body: Mapped[str] = mapped_column(Text)
     is_internal_note: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # File attachment (master-prompt integration, Phase 39, SEC-005) -
+    # at most one per message, nullable. `attachment_object_key` is the
+    # MinIO object key, never exposed to callers directly - downloads go
+    # through a short-lived presigned URL (`GET .../attachment`), not a
+    # raw key.
+    attachment_object_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    attachment_filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    attachment_content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    attachment_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class Campaign(PlatformEntityMixin, Base):

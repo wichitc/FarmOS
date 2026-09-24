@@ -811,3 +811,19 @@ Phase 35's own deferral: "No cancel/reschedule for a pending scheduled command -
 **Deferred, tracked explicitly (not silent gaps)**:
 - **No reschedule, only cancel** - changing a pending command's `scheduled_for` still means cancel-then-recreate, not a single `PATCH`; Phase 35's deferral named both, this pass only closed the cancel half since it's the one with an unambiguous "nothing happened yet, safe to undo" semantics
 - **`cancel_action` is generic but has exactly one caller today** - the IoT actuator-command endpoint. Any other still-`proposed` L2 action (the five agent wirings across Phases 24/30/31/32/37) could reuse it the same way, just not wired to a cancel endpoint anywhere else yet
+
+## Master-prompt integration, Phase 39: File attachments (SEC-005) - support ticket uploads
+
+Phase 20's own checklist named this gap explicitly: "No attachment support - §11 lists attachments as a ticket capability; no file-upload endpoint exists anywhere in this platform yet." No vendor decision was needed - MinIO has been provisioned as infrastructure since Phase 3 (DEP-001) but nothing had actually used it until now.
+
+- [x] **`core/storage.py`** (new): a thin MinIO wrapper with real, enforced validation before anything reaches the bucket - an allowlist of content types (images, PDF, plain text/CSV; nothing executable) and a hard size cap (`max_attachment_size_bytes`, default 10 MB), both checked in `upload_attachment()` and raising `InvalidAttachment` (-> `422`) rather than a generic 500. Downloads go through a short-lived (15-minute) presigned URL, never a raw object key or public bucket access
+- [x] **`TicketMessage` gets nullable attachment columns** (migration `0027_ticket_attachments.py`) - object key plus display metadata (filename/content-type/size); the object key itself is never exposed in `TicketMessageOut`, only through the dedicated `GET .../attachment` endpoint's presigned URL
+- [x] **`POST /api/v1/crm/tickets/{id}/messages/{message_id}/attachment`** and **`GET .../attachment`** - reuse the exact same `_assert_ticket_access`/internal-note-visibility rules the rest of the ticket thread already enforces (Phase 20), so an attachment on a staff-only internal note is invisible to a customer the same way the note's own body already is. One attachment per message (`409` on a second upload to the same message), matching `TicketMessage`'s existing "append-only, no update route" shape
+- [x] Automated tests (`backend/tests/test_crm.py`): a real upload-then-download round trip against the live MinIO container (not mocked), a disallowed content type rejected with `422`, an oversized file rejected with `422`, and an internal-note attachment correctly hidden from a customer but visible to staff
+- [x] Verified live: full regression suite, zero regressions; the test suite itself proves the live round trip since nothing here is mocked
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **Ticket attachments only** - this is the one real consumer named by the master prompt (§11), not a generic file-upload platform capability; other domains that might eventually want attachments (crop-health photos beyond Vision AI detections, work-order documents) would each need their own wiring to `core.storage`, not a shared generic "attachment" entity, since none of them were asked for yet
+- **No virus/malware scanning** - the content-type allowlist and size cap are real defenses, but there's no scanning step between upload and storage; a same-allowlisted file with malicious content inside (e.g. a crafted PDF) would still be accepted
+- **No attachment deletion** - matches `TicketMessage`'s own "no update/delete route" shape; an uploaded file is permanent, same as the message it's attached to

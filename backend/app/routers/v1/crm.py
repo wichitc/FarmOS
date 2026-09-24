@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from ...core import storage
 from ...core.deps import get_current_user, require_platform_super_admin
 from ...crm import models as crm_models
 from ...crm import schemas as crm_schemas
@@ -466,6 +467,72 @@ def list_ticket_messages(
         # can see the rest of the thread.
         query = query.filter(crm_models.TicketMessage.is_internal_note.is_(False))
     return query.order_by(crm_models.TicketMessage.created_at.asc()).all()
+
+
+def _get_message_or_404(db: Session, ticket_id: str, message_id: str) -> crm_models.TicketMessage:
+    message = db.get(crm_models.TicketMessage, message_id)
+    if message is None or message.ticket_id != ticket_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return message
+
+
+def _assert_message_visible(user: fm.User, message: crm_models.TicketMessage) -> None:
+    if message.is_internal_note and not user.is_platform_super_admin:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+
+@router.post("/tickets/{ticket_id}/messages/{message_id}/attachment", response_model=crm_schemas.TicketMessageOut)
+def upload_ticket_attachment(
+    ticket_id: str,
+    message_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(get_current_user),
+):
+    """Master-prompt integration, Phase 39 (SEC-005): the file-upload
+    path this platform didn't have anywhere until now. Content-type and
+    size are validated in `core.storage` before a single byte reaches
+    MinIO - an unsupported type or oversized file never gets that far."""
+    ticket = _get_or_404(db, crm_models.SupportTicket, ticket_id, "Ticket")
+    _assert_ticket_access(current_user, ticket)
+    message = _get_message_or_404(db, ticket_id, message_id)
+    _assert_message_visible(current_user, message)
+    if message.attachment_object_key is not None:
+        raise HTTPException(status_code=409, detail="This message already has an attachment")
+
+    try:
+        stored = storage.upload_attachment(file, tenant_id=ticket.tenant_id or "unassigned")
+    except storage.InvalidAttachment as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    message.attachment_object_key = stored.object_key
+    message.attachment_filename = stored.filename
+    message.attachment_content_type = stored.content_type
+    message.attachment_size_bytes = stored.size_bytes
+    db.commit()
+    return message
+
+
+@router.get("/tickets/{ticket_id}/messages/{message_id}/attachment", response_model=crm_schemas.TicketAttachmentOut)
+def get_ticket_attachment(
+    ticket_id: str,
+    message_id: str,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(get_current_user),
+):
+    ticket = _get_or_404(db, crm_models.SupportTicket, ticket_id, "Ticket")
+    _assert_ticket_access(current_user, ticket)
+    message = _get_message_or_404(db, ticket_id, message_id)
+    _assert_message_visible(current_user, message)
+    if message.attachment_object_key is None:
+        raise HTTPException(status_code=404, detail="This message has no attachment")
+
+    return crm_schemas.TicketAttachmentOut(
+        filename=message.attachment_filename,
+        content_type=message.attachment_content_type,
+        size_bytes=message.attachment_size_bytes,
+        download_url=storage.presigned_download_url(message.attachment_object_key),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -78,6 +78,17 @@ class Settings(BaseSettings):
     # `Subscription.trial_ends_at` instead of ticket SLAs.
     trial_watch_interval_seconds: int = 3600
 
+    # File attachments (master-prompt integration, Phase 39, SEC-005) -
+    # MinIO was already provisioned as infrastructure since Phase 3
+    # (DEP-001) but nothing used it until now; no new vendor decision
+    # needed, it's the vendor this platform already picked.
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = "durianos"
+    minio_secret_key: str = "durianos123"
+    minio_secure: bool = False
+    minio_attachments_bucket: str = "attachments"
+    max_attachment_size_bytes: int = 10 * 1024 * 1024
+
     model_config = SettingsConfigDict(env_file=str(BACKEND_DIR / ".env"), env_file_encoding="utf-8")
 
     @property

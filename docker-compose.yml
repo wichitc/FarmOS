@@ -78,6 +78,9 @@ services:
       SECRET_KEY: dev-only-insecure-secret-change-me
       REDIS_URL: redis://redis:6379/0
       OLLAMA_URL: http://ollama:11434
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: durianos
+      MINIO_SECRET_KEY: durianos123
     ports:
       - "8000:8000"
     volumes:
@@ -88,6 +91,8 @@ services:
       redis:
         condition: service_started
       ollama:
+        condition: service_started
+      minio:
         condition: service_started
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"

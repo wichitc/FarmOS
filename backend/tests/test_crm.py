@@ -379,3 +379,106 @@ def test_expired_coupon_cannot_be_redeemed(client, tenant, raw_db):
 
     res = client.post(f"/api/v1/crm/coupons/{coupon_code}/redeem", headers=headers)
     assert res.status_code == 409
+
+
+def _create_message(client, headers, ticket_id, body="Here's a screenshot"):
+    res = client.post(f"/api/v1/crm/tickets/{ticket_id}/messages", json={"body": body}, headers=headers)
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_upload_and_download_ticket_attachment(client, tenant):
+    """Master-prompt integration, Phase 39 (SEC-005): the first real
+    file-upload path in this platform, backed by MinIO."""
+    headers = tenant.auth_headers(client)
+    ticket = _create_ticket(client, headers)
+    message = _create_message(client, headers, ticket["id"])
+
+    upload_res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages/{message['id']}/attachment",
+        files={"file": ("screenshot.png", b"\x89PNG fake png bytes for testing", "image/png")},
+        headers=headers,
+    )
+    assert upload_res.status_code == 200, upload_res.text
+    body = upload_res.json()
+    assert body["attachment_filename"] == "screenshot.png"
+    assert body["attachment_content_type"] == "image/png"
+    assert body["attachment_size_bytes"] > 0
+
+    get_res = client.get(f"/api/v1/crm/tickets/{ticket['id']}/messages/{message['id']}/attachment", headers=headers)
+    assert get_res.status_code == 200, get_res.text
+    attachment = get_res.json()
+    assert attachment["filename"] == "screenshot.png"
+    assert attachment["download_url"].startswith("http")
+
+    # A second upload to the same message is rejected - one attachment per message.
+    second_res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages/{message['id']}/attachment",
+        files={"file": ("again.png", b"more bytes", "image/png")},
+        headers=headers,
+    )
+    assert second_res.status_code == 409
+
+
+def test_attachment_rejects_disallowed_content_type(client, tenant):
+    headers = tenant.auth_headers(client)
+    ticket = _create_ticket(client, headers)
+    message = _create_message(client, headers, ticket["id"])
+
+    res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages/{message['id']}/attachment",
+        files={"file": ("malware.exe", b"MZ fake executable bytes", "application/x-msdownload")},
+        headers=headers,
+    )
+    assert res.status_code == 422, res.text
+
+
+def test_attachment_rejects_oversized_file(client, tenant):
+    from app.config import settings
+
+    original = settings.max_attachment_size_bytes
+    settings.max_attachment_size_bytes = 10
+    try:
+        headers = tenant.auth_headers(client)
+        ticket = _create_ticket(client, headers)
+        message = _create_message(client, headers, ticket["id"])
+
+        res = client.post(
+            f"/api/v1/crm/tickets/{ticket['id']}/messages/{message['id']}/attachment",
+            files={"file": ("big.png", b"x" * 100, "image/png")},
+            headers=headers,
+        )
+        assert res.status_code == 422, res.text
+    finally:
+        settings.max_attachment_size_bytes = original
+
+
+def test_attachment_on_internal_note_hidden_from_customer(client, tenant, raw_db):
+    _make_super_admin(raw_db, tenant)
+    admin_headers = tenant.auth_headers(client)
+    other_tenant = provision_test_tenant(raw_db, "attachnote")
+    other_headers = other_tenant.auth_headers(client)
+
+    ticket = _create_ticket(client, other_headers)
+    note_res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages", json={"body": "internal only", "is_internal_note": True}, headers=admin_headers
+    )
+    assert note_res.status_code == 201, note_res.text
+    note = note_res.json()
+
+    upload_res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages/{note['id']}/attachment",
+        files={"file": ("internal.pdf", b"%PDF fake bytes", "application/pdf")},
+        headers=admin_headers,
+    )
+    assert upload_res.status_code == 200, upload_res.text
+
+    customer_get_res = client.get(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages/{note['id']}/attachment", headers=other_headers
+    )
+    assert customer_get_res.status_code == 404
+
+    staff_get_res = client.get(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages/{note['id']}/attachment", headers=admin_headers
+    )
+    assert staff_get_res.status_code == 200

@@ -150,8 +150,18 @@ class TicketMessageOut(BaseModel):
     body: str
     is_internal_note: bool
     created_at: datetime
+    attachment_filename: Optional[str] = None
+    attachment_content_type: Optional[str] = None
+    attachment_size_bytes: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TicketAttachmentOut(BaseModel):
+    filename: str
+    content_type: str
+    size_bytes: int
+    download_url: str
 
 
 class CampaignCreate(BaseModel):
