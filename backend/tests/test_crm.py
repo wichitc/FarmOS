@@ -482,3 +482,42 @@ def test_attachment_on_internal_note_hidden_from_customer(client, tenant, raw_db
         f"/api/v1/crm/tickets/{ticket['id']}/messages/{note['id']}/attachment", headers=admin_headers
     )
     assert staff_get_res.status_code == 200
+
+
+def test_agent_reply_emails_the_customer_but_internal_note_does_not(client, tenant, raw_db, monkeypatch):
+    """Master-prompt integration, Phase 42: the first real email-
+    notification consumer. No live SendGrid key exists in this test
+    environment, so `core.email.send_email` is monkeypatched to capture
+    the call rather than actually reaching SendGrid - this proves the
+    router calls it with the right recipient/content, not that a real
+    inbox receives anything."""
+    from app.routers.v1 import crm as crm_router
+
+    calls = []
+    monkeypatch.setattr(crm_router.email, "send_email", lambda **kw: calls.append(kw) or True)
+
+    _make_super_admin(raw_db, tenant)
+    admin_headers = tenant.auth_headers(client)
+    other_tenant = provision_test_tenant(raw_db, "emailcust")
+    other_headers = other_tenant.auth_headers(client)
+    ticket = _create_ticket(client, other_headers)
+
+    note_res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages", json={"body": "internal only", "is_internal_note": True}, headers=admin_headers
+    )
+    assert note_res.status_code == 201, note_res.text
+    assert calls == []
+
+    reply_res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages", json={"body": "We're looking into it"}, headers=admin_headers
+    )
+    assert reply_res.status_code == 201, reply_res.text
+    assert len(calls) == 1
+    assert calls[0]["to"] == ticket["requester_email"]
+    assert "We're looking into it" in calls[0]["body"]
+
+    customer_reply_res = client.post(
+        f"/api/v1/crm/tickets/{ticket['id']}/messages", json={"body": "thanks"}, headers=other_headers
+    )
+    assert customer_reply_res.status_code == 201, customer_reply_res.text
+    assert len(calls) == 1

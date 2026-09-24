@@ -89,6 +89,17 @@ class Settings(BaseSettings):
     minio_attachments_bucket: str = "attachments"
     max_attachment_size_bytes: int = 10 * 1024 * 1024
 
+    # Outbound email (master-prompt integration, Phase 42) - the vendor
+    # decision deferred since Phase 3's `EmailNotificationSender` stub
+    # ("not wired to a real SMTP/API provider... no tenant credentials
+    # exist yet"). User picked SendGrid directly. No live API key exists
+    # in this dev environment - `core/email.py::SendGridEmailProvider`
+    # no-ops with a clear log line when `sendgrid_api_key` is empty,
+    # rather than crashing every caller in every environment without a
+    # real key.
+    sendgrid_api_key: str = ""
+    email_from_address: str = "notifications@durianos.example.com"
+
     model_config = SettingsConfigDict(env_file=str(BACKEND_DIR / ".env"), env_file_encoding="utf-8")
 
     @property

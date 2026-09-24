@@ -1,16 +1,19 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
-from ...core import storage
+from ...core import email, storage
 from ...core.deps import get_current_user, require_platform_super_admin
 from ...crm import models as crm_models
 from ...crm import schemas as crm_schemas
 from ...database import get_db
 from ...foundation import models as fm
 from ...foundation.audit import record_audit
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/crm", tags=["crm"])
 
@@ -449,6 +452,22 @@ def add_ticket_message(
         ticket.status = "in_progress"
     ticket.updated_by = current_user.id
     db.commit()
+
+    # Master-prompt integration, Phase 42: the customer's first real
+    # email notification - a staff reply, on the public-facing thread
+    # (never for an internal note, which the customer can't see). A
+    # failed or skipped (no API key configured) send never rolls back
+    # the message itself; it's already committed above.
+    if is_agent and not message.is_internal_note:
+        try:
+            email.send_email(
+                to=ticket.requester_email,
+                subject=f"Re: {ticket.subject}",
+                body=f"{current_user.full_name} replied to your support ticket:\n\n{message.body}",
+            )
+        except email.EmailSendError:
+            logger.exception("failed to send ticket-reply email for ticket %s", ticket.id)
+
     return message
 
 
