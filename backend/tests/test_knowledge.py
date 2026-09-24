@@ -101,6 +101,30 @@ def test_copilot_falls_back_to_knowledge_base(client, tenant):
     assert body["citations"][0]["source_type"] == "knowledge_chunk"
 
 
+def test_search_finds_semantically_related_chunk_without_keyword_overlap(client, tenant):
+    """Acid test for Phase 28: a query sharing zero content words with the
+    chunk should still surface it via vector similarity, proving this is
+    genuine semantic search and not full-text search with extra steps."""
+    headers = tenant.auth_headers(client)
+    doc = _create_document(
+        client, headers, title="Post-Harvest Fruit Care",
+        content=(
+            "Once durian fruit is picked, store it in a cool, shaded area away from direct sunlight "
+            "to slow ripening and prevent the husk from cracking prematurely."
+        ),
+    )
+
+    res = client.get(
+        "/api/v1/knowledge/search",
+        params={"q": "how do I keep durians fresh after picking them"},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    hits = res.json()
+    assert len(hits) >= 1
+    assert hits[0]["document_id"] == doc["id"]
+
+
 def test_knowledge_documents_are_tenant_isolated(client, tenant, raw_db):
     from .conftest import provision_test_tenant
 

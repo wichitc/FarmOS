@@ -24,6 +24,7 @@ from ...gis.geo import (
     row_bearing_rad,
 )
 from ...gis.schemas import BoundaryOut, CenterlineOut, GeoJSONGeometry
+from ...subscription.service import PlanLimitExceeded, enforce_limit
 from ...twins.models import DigitalTwin, TwinType
 from ...twins.service import create_twin, get_or_create_twin_type
 
@@ -92,6 +93,11 @@ def create_farm(
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("farm.manage")),
 ):
+    try:
+        enforce_limit(db, current_user.tenant_id, "farms")
+    except PlanLimitExceeded as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+
     farm = farm_models.Farm(
         tenant_id=current_user.tenant_id,
         code=payload.code,

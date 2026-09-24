@@ -49,6 +49,24 @@ class Settings(BaseSettings):
     rate_limit_login_per_minute: int = 10
     rate_limit_public_per_minute: int = 30
 
+    # Subscription limit enforcement (master-prompt integration, Phase 29).
+    # Same "disabled for the whole suite, flipped on by individual tests
+    # that need it" pattern as `rate_limit_enabled` (Phase 18) - most of
+    # the regression suite creates 2+ farms per tenant to exercise
+    # cross-farm ABAC, which the free plan's farm_limit=1 would otherwise
+    # block on every one of those tests, not just the ones actually
+    # testing enforcement.
+    subscription_enforcement_enabled: bool = True
+
+    # Knowledge Base real semantic search (Phase 28). ADR-011's Ollama-
+    # local default, applied to embeddings the same way it already
+    # applies to chat - `knowledge/embeddings.py::OllamaEmbeddingProvider`
+    # calls this directly; there is no OpenAI-compatible embeddings
+    # provider wired yet (same "one default, seam for the other" shape
+    # ADR-011 itself describes, not fully built out on both sides).
+    ollama_url: str = "http://localhost:11434"
+    embedding_model: str = "nomic-embed-text"
+
     model_config = SettingsConfigDict(env_file=str(BACKEND_DIR / ".env"), env_file_encoding="utf-8")
 
     @property

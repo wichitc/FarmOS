@@ -16,12 +16,14 @@ like every other domain module, not platform-global.
 """
 from typing import Optional
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
 from ..foundation.models import TenantScopedMixin, gen_uuid
+from .embeddings import EMBEDDING_DIM
 
 DOCUMENT_CATEGORIES = ("sop", "crop_knowledge", "soil_knowledge", "internal", "other")
 
@@ -51,3 +53,8 @@ class KnowledgeChunk(TenantScopedMixin, Base):
     document_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True)
     chunk_index: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
+    # Nullable: rows indexed while Ollama was unreachable stay keyword-only
+    # searchable rather than blocking indexing (see service.py's fail-open
+    # embedding logic) - `search_chunks` filters these out of the vector
+    # path and relies on full-text search to still surface them.
+    embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)

@@ -8,6 +8,7 @@ from ...database import get_db
 from ...foundation import models as fm
 from ...foundation.audit import record_audit
 from ...foundation.schemas import UserCreate, UserOut
+from ...subscription.service import PlanLimitExceeded, enforce_limit
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
@@ -28,6 +29,11 @@ def create_user(
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("platform.user.manage")),
 ):
+    try:
+        enforce_limit(db, current_user.tenant_id, "users")
+    except PlanLimitExceeded as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+
     user = fm.User(
         tenant_id=current_user.tenant_id,
         email=payload.email,

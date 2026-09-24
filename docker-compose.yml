@@ -54,6 +54,20 @@ services:
     ports:
       - "4222:4222"
 
+  # Embeddings provider for the Knowledge Base's real semantic search
+  # (Phase 28, ADR-011's Ollama-local default applied to embeddings, not
+  # just chat) - CPU-only, no GPU passthrough configured here since
+  # nomic-embed-text is small enough to run acceptably without one for
+  # dev/pilot scale. Pull the model once the container is up:
+  #   docker compose exec ollama ollama pull nomic-embed-text
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
   backend:
     build: ./backend
     restart: unless-stopped
@@ -63,6 +77,7 @@ services:
       CORS_ORIGINS: http://localhost:5173
       SECRET_KEY: dev-only-insecure-secret-change-me
       REDIS_URL: redis://redis:6379/0
+      OLLAMA_URL: http://ollama:11434
     ports:
       - "8000:8000"
     volumes:
@@ -71,6 +86,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_started
+      ollama:
         condition: service_started
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
@@ -101,3 +118,4 @@ services:
 volumes:
   db-data:
   minio-data:
+  ollama-data:

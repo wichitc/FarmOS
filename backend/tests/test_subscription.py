@@ -1,3 +1,4 @@
+from app.config import settings
 from app.core.deps import set_tenant_context
 from app.foundation import models as fm
 
@@ -99,3 +100,96 @@ def test_platform_admin_can_cancel_subscription(client, tenant, raw_db):
         f"/api/v1/subscriptions/{other_tenant.tenant_id}/change-plan", json={"plan_code": "pro"}, headers=admin_headers
     )
     assert change_after_cancel_res.status_code == 409
+
+
+def _with_enforcement_enabled():
+    """Same on/off toggle pattern as `test_rate_limit.py` - the rest of
+    the suite runs with enforcement off (most domain tests create 2+
+    farms per tenant to exercise cross-farm ABAC, which the free plan's
+    farm_limit=1 would otherwise block everywhere, not just here)."""
+    original = settings.subscription_enforcement_enabled
+    settings.subscription_enforcement_enabled = True
+    return original
+
+
+def test_farm_limit_blocks_creation_past_plan_limit(client, tenant):
+    original = _with_enforcement_enabled()
+    try:
+        headers = tenant.auth_headers(client)
+        first_res = client.post("/api/v1/farm/farms", json={"code": "LIMF1", "name": "Limit Farm 1"}, headers=headers)
+        assert first_res.status_code == 201, first_res.text  # free plan farm_limit=1
+
+        second_res = client.post("/api/v1/farm/farms", json={"code": "LIMF2", "name": "Limit Farm 2"}, headers=headers)
+        assert second_res.status_code == 402, second_res.text
+        assert "farms" in second_res.json()["error"]["message"].lower()
+    finally:
+        settings.subscription_enforcement_enabled = original
+
+
+def test_user_limit_blocks_creation_past_plan_limit(client, tenant):
+    original = _with_enforcement_enabled()
+    try:
+        headers = tenant.auth_headers(client)
+        # free plan user_limit=3; the tenant's admin already counts as 1.
+        for i in range(2):
+            res = client.post(
+                "/api/v1/users",
+                json={"email": f"limituser{i}-{tenant.tenant_slug}@example.com", "password": "pw-for-testing-123", "full_name": f"Limit User {i}"},
+                headers=headers,
+            )
+            assert res.status_code == 201, res.text
+
+        over_res = client.post(
+            "/api/v1/users",
+            json={"email": f"limituser-over-{tenant.tenant_slug}@example.com", "password": "pw-for-testing-123", "full_name": "Over Limit User"},
+            headers=headers,
+        )
+        assert over_res.status_code == 402, over_res.text
+        assert "users" in over_res.json()["error"]["message"].lower()
+    finally:
+        settings.subscription_enforcement_enabled = original
+
+
+def test_sensor_limit_blocks_registration_past_plan_limit(client, tenant):
+    original = _with_enforcement_enabled()
+    try:
+        headers = tenant.auth_headers(client)
+        farm = client.post("/api/v1/farm/farms", json={"code": "LIMSFARM", "name": "Limit Sensor Farm"}, headers=headers).json()
+        twin_type = client.post(
+            "/api/v1/twins/types", json={"code": "limit-sensor", "name": "Limit Sensor", "category": "sensor"}, headers=headers
+        ).json()
+
+        for i in range(5):  # free plan sensor_limit=5
+            res = client.post(
+                "/api/v1/iot/devices",
+                json={
+                    "farm_id": farm["id"], "twin_type_id": twin_type["id"],
+                    "display_code": f"LS{i}", "device_key": f"limit-sensor-{i}", "protocol": "mqtt",
+                },
+                headers=headers,
+            )
+            assert res.status_code == 201, res.text
+
+        over_res = client.post(
+            "/api/v1/iot/devices",
+            json={
+                "farm_id": farm["id"], "twin_type_id": twin_type["id"],
+                "display_code": "LSOVER", "device_key": "limit-sensor-over", "protocol": "mqtt",
+            },
+            headers=headers,
+        )
+        assert over_res.status_code == 402, over_res.text
+        assert "sensors" in over_res.json()["error"]["message"].lower()
+    finally:
+        settings.subscription_enforcement_enabled = original
+
+
+def test_enforcement_disabled_by_default_allows_multiple_farms(client, tenant):
+    """Confirms the suite's own default (enforcement off) actually holds,
+    since every other domain test's ability to create 2+ farms per
+    tenant depends on it."""
+    headers = tenant.auth_headers(client)
+    first_res = client.post("/api/v1/farm/farms", json={"code": "NOENF1", "name": "No Enforce 1"}, headers=headers)
+    second_res = client.post("/api/v1/farm/farms", json={"code": "NOENF2", "name": "No Enforce 2"}, headers=headers)
+    assert first_res.status_code == 201, first_res.text
+    assert second_res.status_code == 201, second_res.text

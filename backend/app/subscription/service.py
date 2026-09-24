@@ -4,6 +4,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..farm import models as farm_models
 from ..foundation import models as fm
 from ..iot import models as iot_models
@@ -48,6 +49,19 @@ def seed_default_subscription(db: Session, tenant_id: str) -> sub_models.Subscri
     return subscription
 
 
+class PlanLimitExceeded(Exception):
+    """Raised by `enforce_limit` when creating one more `resource` row
+    would exceed the tenant's plan limit - callers translate this into a
+    402 (master-prompt integration, Phase 29: the enforcement half of
+    Phase 21's usage-vs-limits reporting, previously advisory-only)."""
+
+    def __init__(self, resource: str, used: int, limit: int):
+        self.resource = resource
+        self.used = used
+        self.limit = limit
+        super().__init__(f"Plan limit reached for {resource}: {used}/{limit}")
+
+
 @dataclass
 class UsageLine:
     resource: str
@@ -79,3 +93,23 @@ def get_usage(db: Session, tenant_id: str) -> Optional[SubscriptionUsage]:
         UsageLine("sensors", sensor_count, plan.sensor_limit, plan.sensor_limit is not None and sensor_count > plan.sensor_limit),
     ]
     return SubscriptionUsage(subscription=subscription, plan=plan, usage=lines)
+
+
+def enforce_limit(db: Session, tenant_id: str, resource: str) -> None:
+    """Raises `PlanLimitExceeded` if the tenant is already at its plan's
+    limit for `resource` ("farms"/"users"/"sensors") - called by a create
+    endpoint *before* inserting the new row, so the (n+1)th row is what
+    gets blocked, not silently allowed past the limit. A missing
+    subscription (shouldn't happen - seeded at provisioning, Phase 21)
+    fails open rather than blocking creation on an unrelated data gap.
+    """
+    if not settings.subscription_enforcement_enabled:
+        return
+    usage = get_usage(db, tenant_id)
+    if usage is None:
+        return
+    line = next((l for l in usage.usage if l.resource == resource), None)
+    if line is None or line.limit is None:
+        return
+    if line.used >= line.limit:
+        raise PlanLimitExceeded(resource, line.used, line.limit)

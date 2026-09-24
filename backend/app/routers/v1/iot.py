@@ -15,6 +15,7 @@ from ...foundation import models as fm
 from ...foundation.audit import record_audit
 from ...iot import models as iot_models
 from ...iot import schemas as iot_schemas
+from ...subscription.service import PlanLimitExceeded, enforce_limit
 from ...twins import models as twin_models
 from ...twins.service import create_twin
 
@@ -48,6 +49,11 @@ def register_device(
     retrievable again, same one-time-reveal pattern as a password."""
     farm = _get_or_404(db, farm_models.Farm, payload.farm_id, "Farm")
     assert_farm_scope(db, current_user, "iot.device.manage", farm.id)
+
+    try:
+        enforce_limit(db, current_user.tenant_id, "sensors")
+    except PlanLimitExceeded as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
 
     twin_type = _get_or_404(db, twin_models.TwinType, payload.twin_type_id, "Twin type")
     if payload.protocol not in iot_models.DEVICE_PROTOCOLS:
