@@ -150,6 +150,12 @@ class SupportTicket(PlatformEntityMixin, Base):
     sla_due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     assigned_to: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Master-prompt integration, Phase 33: set once by `check_sla_breaches`
+    # the first time a still-open ticket is found past `sla_due_at` - the
+    # watcher's idempotency marker (never reset, even if the ticket
+    # later resolves) so a breach isn't re-flagged/re-processed on every
+    # sweep, and staff can still see that it *was* breached after the fact.
+    sla_breached_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TicketMessage(Base):

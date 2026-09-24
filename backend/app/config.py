@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     embedding_model: str = "nomic-embed-text"
 
+    # SLA breach watcher (master-prompt integration, Phase 33) - same
+    # polling-loop shape as `iot_offline_check_interval_seconds` (Phase
+    # 7), just for support tickets' `sla_due_at` instead of device
+    # last-seen timestamps.
+    sla_watch_interval_seconds: int = 300
+
     model_config = SettingsConfigDict(env_file=str(BACKEND_DIR / ".env"), env_file_encoding="utf-8")
 
     @property

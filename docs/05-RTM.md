@@ -719,3 +719,20 @@ Fourth agent wiring in this series, picking up Phase 31's own deferral note: the
 - **No alert deduplication** - a farm sitting in the warning band across many consecutive readings gets one `AgentAction` per reading, not a single ongoing alert; this mirrors how `Alert` records already work elsewhere in this platform (Phase 7), not a new gap introduced here
 - **`treatment_recommendation` still unwired** - unchanged from Phase 30's deferral
 - **No Farm Manager orchestration/synthesis logic** - unchanged from Phase 24's own deferral
+
+## Master-prompt integration, Phase 33: SLA breach watcher
+
+Support tickets have computed a real `sla_due_at` since Phase 20, but nothing ever watched for it passing - flagged explicitly at the time, and again in `iot_models.Alert`'s own docstring ("Escalation/SLA timing is not modeled yet - it needs a scheduler this repo doesn't have"). This phase builds the simplest real scheduler this platform needs: a polling loop, not a cron dependency, the same shape `mqtt_ingestion_worker.py`'s `_offline_check_loop` already established for IoT device offline detection.
+
+- [x] **`SupportTicket.sla_breached_at`** (migration `0025_sla_breach_watcher.py`, nullable) - the watcher's idempotency marker, set once and never reset (even after the ticket resolves), so staff can see a ticket *was* breached and a repeated sweep never re-flags it
+- [x] **`crm/service.py::check_sla_breaches(db)`** - a single query across every tenant's tickets, not a per-tenant RLS loop like `check_offline_devices`: `SupportTicket` is platform-global (`PlatformEntityMixin`, Phase 20), so there's no tenant context to iterate. Flags every ticket with `status` still open, a passed `sla_due_at`, and no existing `sla_breached_at`
+- [x] **`app/scripts/sla_watcher.py`** + new `sla-watcher` docker-compose service (same backend image, different entrypoint, `sla_watch_interval_seconds` setting default 300s) - started and confirmed running against the live stack
+- [x] **`TicketOut.sla_breached_at`** exposed so `GET /api/v1/crm/tickets` already surfaces breach status with no new endpoint needed
+- [x] Automated tests (`backend/tests/test_sla_watcher.py`): an overdue open ticket gets flagged; a not-yet-due ticket doesn't; a resolved ticket (even if its due time already passed) is never flagged; a second sweep doesn't re-flag or double-process an already-breached ticket
+- [x] Verified live: rebuilt the backend image, started the `sla-watcher` service, confirmed its startup log
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **A breach is recorded, not escalated or notified** - `sla_breached_at` is queryable via the existing ticket API, but nothing emails/pages anyone when it's set; wiring that to a real notification channel needs the same email-provider vendor decision already deferred since Phase 22 (SendGrid/SES/SMTP)
+- **Not reused for the IoT `Alert` model's own SLA/escalation gap** - `iot_models.Alert`'s docstring names the same missing-scheduler problem for alert acknowledgement SLAs; this phase solves it for support tickets specifically, not as a generic escalation-timer framework other alert types could plug into yet
+- **No backfill for tickets created before this phase** - a ticket whose `sla_due_at` already passed before the watcher started gets flagged on the watcher's first sweep after startup, same as any other overdue ticket; there's no special first-run handling because none is needed

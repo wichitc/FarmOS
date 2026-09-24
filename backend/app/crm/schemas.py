@@ -124,6 +124,7 @@ class TicketOut(BaseModel):
     sla_due_at: Optional[datetime] = None
     assigned_to: Optional[str] = None
     resolved_at: Optional[datetime] = None
+    sla_breached_at: Optional[datetime] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

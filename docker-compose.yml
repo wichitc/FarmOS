@@ -115,6 +115,26 @@ services:
         condition: service_started
     command: python -m app.scripts.mqtt_ingestion_worker
 
+  # SLA breach watcher (master-prompt integration, Phase 33): same image
+  # as `backend`/`iot-ingestion`, different entrypoint - the simple
+  # polling loop `iot_models.Alert`'s own docstring flagged as missing
+  # ("needs a scheduler this repo doesn't have").
+  sla-watcher:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://durianos:durianos@db:5432/durianos
+      APP_DATABASE_URL: postgresql+psycopg://durianos_app:durianos_app@db:5432/durianos
+      SECRET_KEY: dev-only-insecure-secret-change-me
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: python -m app.scripts.sla_watcher
+
 volumes:
   db-data:
   minio-data:
