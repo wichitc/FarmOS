@@ -219,3 +219,41 @@ def execute_action(
         correlation_id=correlation_id,
     )
     return action
+
+
+def cancel_action(
+    db: Session,
+    *,
+    action: ai_models.AgentAction,
+    actor: Optional[fm.User],
+    reason: str,
+    correlation_id: Optional[str] = None,
+) -> ai_models.AgentAction:
+    """Withdraws a still-`proposed` action before it executes (master-
+    prompt integration, Phase 38) - only `"proposed"` is allowed, not
+    `"pending_approval"`/`"approved"` (an L3 action already submitted for
+    workflow approval goes through that engine's own reject path, not
+    this one) and never something already `"executed"`/`"failed"` (done
+    is done). First real caller is a pending SCHEDULE actuator command
+    (Phase 35), but this itself is generic - any still-proposed action
+    can be withdrawn this way.
+    """
+    if action.status != "proposed":
+        raise HTTPException(status_code=409, detail=f"Cannot cancel an action in status '{action.status}' - only a still-proposed action can be cancelled")
+
+    action.status = "cancelled"
+    action.result = {"cancelled_reason": reason}
+    action.updated_by = actor.id if actor else None
+    db.flush()
+
+    record_audit(
+        db,
+        tenant_id=action.tenant_id,
+        actor_user_id=actor.id if actor else None,
+        action="agent_action.cancel",
+        entity_type="agent_action",
+        entity_id=action.id,
+        new_values={"reason": reason},
+        correlation_id=correlation_id,
+    )
+    return action

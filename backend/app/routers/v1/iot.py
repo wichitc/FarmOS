@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...ai import agent_gateway
+from ...ai import models as ai_models
 from ...core.deps import assert_farm_scope, require_permission
 from ...core.security import hash_password
 from ...database import get_db
@@ -286,6 +287,37 @@ def send_actuator_command(
 
     return iot_schemas.ActuatorCommandOut(
         id=action.id, twin_id=device.digital_twin_id, command=payload.command,
+        status=action.status, issued_by=current_user.id, executed_at=action.executed_at, result=action.result,
+    )
+
+
+@router.post("/devices/{device_id}/commands/{action_id}/cancel", response_model=iot_schemas.ActuatorCommandOut)
+def cancel_actuator_command(
+    device_id: str,
+    action_id: str,
+    payload: iot_schemas.ActuatorCommandCancelRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: fm.User = Depends(require_permission("iot.device.manage")),
+):
+    """Master-prompt integration, Phase 38 (Phase 35's own deferral: "no
+    cancel/reschedule for a pending scheduled command"). Only a still-
+    `proposed` `schedule` command can be cancelled - one already fired,
+    or an immediate `on`/`auto`/`off` command that executed synchronously,
+    has nothing left to withdraw."""
+    device = _get_or_404(db, iot_models.IotDevice, device_id, "Device")
+    assert_farm_scope(db, current_user, "iot.device.manage", device.farm_id)
+
+    action = _get_or_404(db, ai_models.AgentAction, action_id, "Command")
+    if action.entity_type != "iot_device" or action.entity_id != device.id:
+        raise HTTPException(status_code=404, detail="Command not found")
+
+    agent_gateway.cancel_action(db, action=action, actor=current_user, reason=payload.reason, correlation_id=_correlation_id(request))
+    db.commit()
+
+    command = action.input_context.get("command", "schedule")
+    return iot_schemas.ActuatorCommandOut(
+        id=action.id, twin_id=device.digital_twin_id, command=command,
         status=action.status, issued_by=current_user.id, executed_at=action.executed_at, result=action.result,
     )
 

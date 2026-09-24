@@ -797,3 +797,17 @@ Phase 30's own deferral: "`treatment_recommendation` still unwired - `TreatmentP
 **Deferred, tracked explicitly (not silent gaps)**:
 - **This closes out all cataloged action types for the five currently-wired agents** (Irrigation, Fertilizer, Disease, Yield, Weather). **Five of eleven agents remain entirely unwired** (Soil, Pest, Crop, Finance, Sustainability, plus Farm Manager's orchestration role) - Soil and Pest still lack a dedicated scoring engine (Phase 27's own deferral), Finance's action types are L3-floor-gated (a larger change touching the accounting/ledger flow), and Crop/Sustainability have no obvious single real-computation call site the way the five wired agents did
 - **No workflow/UI surfaces `TreatmentPlan.source`** beyond the API response field itself - unlike `IrrigationPlan`, there's no dedicated "source" filter on the treatment-plan list endpoint; additive if needed later, not built this pass
+
+## Master-prompt integration, Phase 38: Cancel a pending scheduled command
+
+Phase 35's own deferral: "No cancel/reschedule for a pending scheduled command - once created, a `proposed` schedule action can only fire or sit forever."
+
+- [x] **`agent_gateway.py::cancel_action(db, *, action, actor, reason, correlation_id)`** - a new, generic gateway primitive (not actuator-specific): withdraws a still-`"proposed"` action to `"cancelled"` (already a valid `AGENT_ACTION_STATUSES` value, unused until now), `409` for anything already `pending_approval`/`approved`/`executed`/`failed`/`cancelled`. An L3 action already submitted for workflow approval still goes through that engine's own reject path, untouched by this
+- [x] **`POST /api/v1/iot/devices/{device_id}/commands/{action_id}/cancel`** - the actual deferred use case: withdraws a pending `schedule` command before `fire_scheduled_commands` ever gets to it. Same `iot.device.manage` permission and farm-scope check as every other actuator-command endpoint; verifies the action actually belongs to the given device (`entity_type`/`entity_id` match) before touching it
+- [x] Automated tests (`backend/tests/test_iot.py::test_cancel_pending_scheduled_command`): a pending command cancels cleanly and is confirmed never fired even after backdating its `scheduled_for` into the past; cancelling an already-cancelled action is `409`; cancelling an already-executed immediate (`on`) command is `409` too - nothing to withdraw once a command has run
+- [x] Verified live: full regression suite, zero regressions
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **No reschedule, only cancel** - changing a pending command's `scheduled_for` still means cancel-then-recreate, not a single `PATCH`; Phase 35's deferral named both, this pass only closed the cancel half since it's the one with an unambiguous "nothing happened yet, safe to undo" semantics
+- **`cancel_action` is generic but has exactly one caller today** - the IoT actuator-command endpoint. Any other still-`proposed` L2 action (the five agent wirings across Phases 24/30/31/32/37) could reuse it the same way, just not wired to a cancel endpoint anywhere else yet

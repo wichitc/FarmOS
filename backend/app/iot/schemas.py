@@ -61,6 +61,13 @@ class ActuatorCommandOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ActuatorCommandCancelRequest(BaseModel):
+    """Master-prompt integration, Phase 38 - cancels a still-pending
+    'schedule' command before it fires."""
+
+    reason: str = "Cancelled by operator"
+
+
 class RuleCreate(BaseModel):
     twin_type_id: str
     metric: str

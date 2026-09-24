@@ -422,3 +422,57 @@ def test_fire_scheduled_commands_executes_due_actions_and_updates_twin(client, t
     set_tenant_context(raw_db, tenant.tenant_id)
     second_sweep = fire_scheduled_commands(raw_db, tenant.tenant_id)
     assert due_action_id not in [a.id for a in second_sweep]
+
+
+def test_cancel_pending_scheduled_command(client, tenant, raw_db):
+    """Master-prompt integration, Phase 38 (Phase 35's own deferral: no
+    cancel for a pending schedule command)."""
+    headers = tenant.auth_headers(client)
+    farm = _create_farm(client, headers, code="IOTFARM16")
+    twin_type = _create_twin_type(client, headers, code="pump16")
+    device = _register_device(client, headers, farm["id"], twin_type["id"], device_key="dev-actuator-cancel")
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    cmd_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands",
+        json={"command": "schedule", "scheduled_for": future, "confirmed": True},
+        headers=headers,
+    )
+    assert cmd_res.status_code == 201, cmd_res.text
+    action_id = cmd_res.json()["id"]
+
+    cancel_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands/{action_id}/cancel",
+        json={"reason": "Plan changed"},
+        headers=headers,
+    )
+    assert cancel_res.status_code == 200, cancel_res.text
+    assert cancel_res.json()["status"] == "cancelled"
+    assert cancel_res.json()["result"]["cancelled_reason"] == "Plan changed"
+
+    # A cancelled action is never fired by the watcher, even if its
+    # scheduled_for time has already passed.
+    set_tenant_context(raw_db, tenant.tenant_id)
+    action = raw_db.get(ai_models.AgentAction, action_id)
+    action.input_context = {**action.input_context, "scheduled_for": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}
+    raw_db.commit()
+    set_tenant_context(raw_db, tenant.tenant_id)
+    fired = fire_scheduled_commands(raw_db, tenant.tenant_id)
+    assert action_id not in [a.id for a in fired]
+
+    # Cancelling an already-cancelled (non-"proposed") action is rejected.
+    double_cancel_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands/{action_id}/cancel", json={}, headers=headers
+    )
+    assert double_cancel_res.status_code == 409
+
+    # Cancelling an already-executed immediate command is also rejected.
+    on_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands", json={"command": "on", "confirmed": True}, headers=headers
+    )
+    assert on_res.status_code == 201, on_res.text
+    on_action_id = on_res.json()["id"]
+    cancel_executed_res = client.post(
+        f"/api/v1/iot/devices/{device['id']}/commands/{on_action_id}/cancel", json={}, headers=headers
+    )
+    assert cancel_executed_res.status_code == 409
