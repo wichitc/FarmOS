@@ -16,6 +16,7 @@ from ...farm import models as farm_models
 from ...foundation import models as fm
 from ...foundation import workflow_engine
 from ...foundation.audit import record_audit
+from ...subscription.service import FeatureNotAvailable, require_feature
 
 router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
 
@@ -389,6 +390,11 @@ def ask_copilot(
     db: Session = Depends(get_db),
     current_user: fm.User = Depends(require_permission("ai.copilot.use")),
 ):
+    try:
+        require_feature(db, current_user.tenant_id, "ai_copilot")
+    except FeatureNotAvailable as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+
     _assert_optional_farm_scope(db, current_user, "ai.copilot.use", payload.farm_id)
 
     if payload.conversation_id:

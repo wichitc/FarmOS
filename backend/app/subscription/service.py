@@ -115,6 +115,39 @@ def enforce_limit(db: Session, tenant_id: str, resource: str) -> None:
         raise PlanLimitExceeded(resource, line.used, line.limit)
 
 
+class FeatureNotAvailable(Exception):
+    """Raised by `require_feature` when the tenant's plan doesn't
+    include `feature_code` (master-prompt integration, Phase 36 - the
+    other half of Phase 29's own deferral: `Plan.features` was stored
+    and reported but nothing checked it before allowing a feature-gated
+    action)."""
+
+    def __init__(self, feature_code: str, plan_code: str):
+        self.feature_code = feature_code
+        self.plan_code = plan_code
+        super().__init__(f"Plan '{plan_code}' does not include the '{feature_code}' feature")
+
+
+def require_feature(db: Session, tenant_id: str, feature_code: str) -> None:
+    """Raises `FeatureNotAvailable` if the tenant's plan doesn't list
+    `feature_code` in `Plan.features`. Same fail-open-on-missing-data and
+    `subscription_enforcement_enabled` gating as `enforce_limit` - most
+    of the regression suite runs on the free plan (no ai_copilot/
+    ai_agents), so this stays off by default for tests, on by default
+    live.
+    """
+    if not settings.subscription_enforcement_enabled:
+        return
+    subscription = db.query(sub_models.Subscription).filter(sub_models.Subscription.tenant_id == tenant_id).first()
+    if subscription is None:
+        return
+    plan = db.get(sub_models.Plan, subscription.plan_id)
+    if plan is None:
+        return
+    if feature_code not in plan.features:
+        raise FeatureNotAvailable(feature_code, plan.code)
+
+
 def check_trial_expirations(db: Session) -> list[sub_models.Subscription]:
     """Master-prompt integration, Phase 34: `trial_ends_at` passing has
     had no automatic consequence since Phase 21 - flagged explicitly as

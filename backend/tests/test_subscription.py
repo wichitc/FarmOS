@@ -184,6 +184,37 @@ def test_sensor_limit_blocks_registration_past_plan_limit(client, tenant):
         settings.subscription_enforcement_enabled = original
 
 
+def test_ai_copilot_blocked_for_plan_without_the_feature(client, tenant):
+    """Master-prompt integration, Phase 36: the free plan's `features`
+    list doesn't include `ai_copilot` (only pro/enterprise do) - with
+    enforcement on, asking Copilot is blocked with a 402 naming the
+    feature, the same treatment as a numeric limit."""
+    original = _with_enforcement_enabled()
+    try:
+        headers = tenant.auth_headers(client)
+        res = client.post("/api/v1/ai/copilot/ask", json={"question": "Any open alerts?"}, headers=headers)
+        assert res.status_code == 402, res.text
+        assert "ai_copilot" in res.json()["error"]["message"].lower()
+    finally:
+        settings.subscription_enforcement_enabled = original
+
+
+def test_ai_copilot_allowed_after_upgrading_to_a_plan_with_the_feature(client, tenant, raw_db):
+    original = _with_enforcement_enabled()
+    try:
+        _make_super_admin(raw_db, tenant)
+        admin_headers = tenant.auth_headers(client)
+        change_res = client.post(
+            f"/api/v1/subscriptions/{tenant.tenant_id}/change-plan", json={"plan_code": "pro"}, headers=admin_headers
+        )
+        assert change_res.status_code == 200, change_res.text
+
+        res = client.post("/api/v1/ai/copilot/ask", json={"question": "Any open alerts?"}, headers=admin_headers)
+        assert res.status_code == 200, res.text
+    finally:
+        settings.subscription_enforcement_enabled = original
+
+
 def test_enforcement_disabled_by_default_allows_multiple_farms(client, tenant):
     """Confirms the suite's own default (enforcement off) actually holds,
     since every other domain test's ability to create 2+ farms per

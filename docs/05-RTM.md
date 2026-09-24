@@ -768,3 +768,18 @@ Master prompt §25's SCHEDULE command - flagged as unbuilt in Phase 26's own che
 - **No cancel/reschedule for a pending scheduled command** - once created, a `proposed` schedule action can only fire or sit forever; there's no `DELETE`/`PATCH` to change or withdraw it before its time arrives
 - **No real device dispatch, same as every other actuator command** - unchanged from Phase 26's own deferral; firing a schedule still just means recording the `AgentAction` and updating `current_state`, not publishing an MQTT command to a real device
 - **Sweep cadence is `iot_offline_check_interval_seconds`, not its own setting** - a scheduled command can fire up to one interval late; reusing the existing interval was a deliberate simplicity choice over adding a third watcher-interval setting for a currently-small difference in required precision
+
+## Master-prompt integration, Phase 36: Feature-flag enforcement (ai_copilot)
+
+The other half of Phase 29's own deferral: "`Plan.features` (e.g. `ai_copilot`, `ai_agents`) is stored but nothing checks it before allowing a feature-gated action." This phase closes it for `ai_copilot`, the one feature with a single clear call site.
+
+- [x] **`subscription/service.py::require_feature(db, tenant_id, feature_code)`** - raises `FeatureNotAvailable` (-> `402`, same treatment as `PlanLimitExceeded`) if the tenant's plan doesn't list `feature_code`. Same `subscription_enforcement_enabled` gating and fail-open-on-missing-data behavior as `enforce_limit`, for the same reason: most of the regression suite runs on the free plan, which doesn't include `ai_copilot` or `ai_agents`
+- [x] **`POST /api/v1/ai/copilot/ask`** now calls `require_feature(..., "ai_copilot")` before doing anything else - verified both directions: a free-plan tenant is blocked with a `402` naming the feature, and the same tenant succeeds immediately after a platform-staff `change-plan` to `"pro"` (which does include it)
+- [x] Automated tests (`backend/tests/test_subscription.py`): blocked-then-allowed-after-upgrade, using the same enforcement-toggle pattern every Phase 29 test already established
+- [x] Verified live: full regression suite, zero regressions
+- [ ] Stakeholder review/sign-off — **pending, human step**
+
+**Deferred, tracked explicitly (not silent gaps)**:
+- **`ai_agents` is not gated** - unlike `ai_copilot`, it has no single endpoint to check at; an `ai_recommended` plan/incident/forecast triggering an agent action is spread across five different domain routers (Irrigation, Fertilizer, Disease, Yield, Weather - Phases 24/30/31/32), each its own call site. Gating it properly means touching all five again, which this narrow pass didn't do rather than gating only some of them and calling the feature "enforced"
+- **No upgrade-prompt UX** - the `402` names the missing feature and current plan, but nothing links the caller to an upgrade flow (same deferral Phase 29 already carries for plan limits)
+- **`api_access`/`priority_support`/`reporting`/`irrigation`/`dashboard` features are still unchecked** - `ai_copilot` was picked because it's the one feature-gated capability with an unambiguous single entry point; the rest either aren't distinct enough features to gate (`dashboard`/`reporting` span many endpoints) or aren't real capabilities yet (`priority_support`, `api_access`)
